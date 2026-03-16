@@ -2404,8 +2404,10 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 		}
 	}
 
-	// Do sidechain
-	if (paramManager->getPatchCableSet()->isSourcePatchedToSomething(PatchSource::SIDECHAIN)) {
+	// Do sidechain — skip envelope-based sidechain if audio sidechain is active on this track,
+	// to avoid double-ducking (the compressor handles ducking via the audio bus instead)
+	if (!sidechainListenEnabled
+	    && paramManager->getPatchCableSet()->isSourcePatchedToSomething(PatchSource::SIDECHAIN)) {
 		if (sideChainHitPending) {
 			sidechain.registerHit(sideChainHitPending);
 		}

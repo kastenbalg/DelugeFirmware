@@ -161,9 +161,9 @@ void RMSFeedbackCompressor::renderWithExternalSidechain(std::span<StereoSample> 
 	state = runEnvelope(state, over, buffer.size());
 	float reduction = -state * fraction;
 
-	// Apply gain reduction with the base gain needed for unity in the fixed-point pipeline,
-	// but WITHOUT the automatic makeup gain (er) that the feedback compressor uses.
-	// baseGain_ compensates for the fixed-point scaling in the sample loop.
+	// Only apply gain reduction from the sidechain signal. baseGain_ handles the
+	// fixed-point pipeline scaling for unity gain. No automatic makeup gain (er) —
+	// that's a feedback compressor concept that doesn't apply to external sidechain.
 	float gain = std::exp(baseGain_ + reduction);
 	gain = std::min<float>(gain, 31);
 
