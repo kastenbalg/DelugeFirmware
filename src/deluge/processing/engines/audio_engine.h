@@ -25,6 +25,7 @@
 #include "memory/object_pool.h"
 #include "model/output.h"
 #include "util/containers.h"
+#include <array>
 #include <cstdint>
 #include <memory>
 
@@ -213,6 +214,7 @@ extern Metronome metronome;
 extern RMSFeedbackCompressor mastercompressor;
 extern uint32_t timeLastSideChainHit;
 extern int32_t sizeLastSideChainHit;
+extern std::array<StereoSample, SSI_TX_BUFFER_NUM_SAMPLES> sidechainBusMemory;
 extern StereoFloatSample approxRMSLevel;
 extern AbsValueFollower envelopeFollower;
 extern TaskID routine_task_id;

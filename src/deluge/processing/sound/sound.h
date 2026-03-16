@@ -111,6 +111,7 @@ public:
 	alignas(8) ModKnob modKnobs[kNumModButtons][kNumPhysicalModKnobs];
 
 	int32_t sideChainSendLevel = 0;
+	bool sidechainListenEnabled = false; // When true, compressor uses the audio sidechain bus for detection
 
 	PolyphonyMode polyphonic = PolyphonyMode::POLY;
 	uint8_t maxVoiceCount = 8;

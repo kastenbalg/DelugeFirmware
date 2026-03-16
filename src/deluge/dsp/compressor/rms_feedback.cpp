@@ -127,6 +127,17 @@ void RMSFeedbackCompressor::render(std::span<StereoSample> buffer, q31_t volAdju
 	rms = calcRMS(buffer);
 }
 
+void RMSFeedbackCompressor::renderWithExternalSidechain(std::span<StereoSample> buffer,
+                                                        std::span<StereoSample> sidechainBuffer, q31_t finalVolume) {
+	// Feedforward mode: detect envelope from external sidechain, apply gain reduction to target.
+	// Set rms from sidechain buffer, then render. render() will overwrite rms via calcRMS(buffer)
+	// at the end (feedback path), so we save and restore the sidechain rms value.
+	float sidechainRms = calcRMS(sidechainBuffer);
+	rms = sidechainRms;
+	renderVolNeutral(buffer, finalVolume);
+	rms = sidechainRms; // restore so next window uses sidechain, not feedback
+}
+
 float RMSFeedbackCompressor::runEnvelope(float current, float desired, float numSamples) const {
 	float s{0};
 	if (desired > current) {

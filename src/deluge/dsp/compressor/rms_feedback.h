@@ -172,6 +172,12 @@ public:
 	/// Calculate the RMS amplitude, post internal HPF, of the samples.
 	float calcRMS(std::span<StereoSample> buffer);
 
+	/// Render with an external sidechain: use sidechainBuffer for envelope detection,
+	/// but apply gain reduction to the target buffer. This converts the compressor from
+	/// feedback mode to feedforward/external sidechain mode.
+	void renderWithExternalSidechain(std::span<StereoSample> buffer, std::span<StereoSample> sidechainBuffer,
+	                                 q31_t finalVolume);
+
 	/// Amount of gain reduction applied during the last render pass, in 6.2 fixed point decibels
 	uint8_t gainReduction = 0;
 

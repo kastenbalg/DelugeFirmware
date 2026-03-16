@@ -190,6 +190,7 @@ uint16_t lastRoutineTime;
 
 alignas(CACHE_LINE_SIZE) std::array<StereoSample, SSI_TX_BUFFER_NUM_SAMPLES> renderingMemory;
 alignas(CACHE_LINE_SIZE) std::array<int32_t, 2 * SSI_TX_BUFFER_NUM_SAMPLES> reverbMemory;
+alignas(CACHE_LINE_SIZE) std::array<StereoSample, SSI_TX_BUFFER_NUM_SAMPLES> sidechainBusMemory;
 
 StereoSample* renderingBufferOutputPos = renderingMemory.begin();
 StereoSample* renderingBufferOutputEnd = renderingMemory.begin();
@@ -613,9 +614,11 @@ bool calledFromScheduler = false;
 void renderAudio(size_t numSamples) {
 	std::span renderingBuffer{renderingMemory.data(), numSamples};
 	std::span reverbBuffer{reverbMemory.data(), numSamples};
+	std::span sidechainBusBuffer{sidechainBusMemory.data(), numSamples};
 
 	memset(&renderingMemory, 0, renderingBuffer.size_bytes());
 	memset(&reverbMemory, 0, reverbBuffer.size_bytes());
+	memset(&sidechainBusMemory, 0, sidechainBusBuffer.size_bytes());
 
 	if (sideChainHitPending != 0) {
 		timeLastSideChainHit = audioSampleTimer;

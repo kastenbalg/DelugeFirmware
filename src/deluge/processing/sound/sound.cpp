@@ -2592,7 +2592,14 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 	q31_t compThreshold = paramManager->getUnpatchedParamSet()->getValue(params::UNPATCHED_COMPRESSOR_THRESHOLD);
 	compressor.setThreshold(compThreshold);
 	if (compThreshold > 0) {
-		compressor.renderVolNeutral(sound_stereo, postFXVolume);
+		if (sidechainListenEnabled) {
+			// Use the global audio sidechain bus for envelope detection instead of self
+			std::span sidechainBus{AudioEngine::sidechainBusMemory.data(), sound_stereo.size()};
+			compressor.renderWithExternalSidechain(sound_stereo, sidechainBus, postFXVolume);
+		}
+		else {
+			compressor.renderVolNeutral(sound_stereo, postFXVolume);
+		}
 	}
 	else {
 		compressor.reset();
@@ -2605,6 +2612,15 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 
 	// add the sound to the output, i.e. output = output + sound
 	std::ranges::transform(output, sound_stereo, output.begin(), std::plus{});
+
+	// Mix into the global sidechain audio bus if this track has a send level configured
+	if (sideChainSendLevel != 0) {
+		std::span sidechainBus{AudioEngine::sidechainBusMemory.data(), sound_stereo.size()};
+		for (size_t i = 0; i < sound_stereo.size(); i++) {
+			sidechainBus[i].l += multiply_32x32_rshift32(sound_stereo[i].l, sideChainSendLevel) << 1;
+			sidechainBus[i].r += multiply_32x32_rshift32(sound_stereo[i].r, sideChainSendLevel) << 1;
+		}
+	}
 
 	postReverbVolumeLastTime = postReverbVolume;
 
