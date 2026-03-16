@@ -28,6 +28,7 @@
 #include "gui/menu_item/audio_clip/transpose.h"
 #include "gui/menu_item/audio_compressor/compressor_params.h"
 #include "gui/menu_item/audio_compressor/compressor_values.h"
+#include "gui/menu_item/audio_compressor/sidechain_listen.h"
 #include "gui/menu_item/audio_interpolation.h"
 #include "gui/menu_item/bend_range/main.h"
 #include "gui/menu_item/bend_range/per_finger.h"

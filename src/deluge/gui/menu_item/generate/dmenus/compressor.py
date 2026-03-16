@@ -49,11 +49,19 @@ blend = Menu(
     name="STRING_FOR_BLEND",
 )
 
+sidechain_listen = Menu(
+    "audio_compressor::SidechainListen",
+    "compSidechainListen",
+    ["{name}", "{title}"],
+    "compressor/sidechain_listen.md",
+    name="STRING_FOR_SIDECHAIN",
+)
+
 menu = Submenu(
     "HorizontalMenu",
     "audioCompMenu",
     ["{name}", "%%CHILDREN%%"],
     "compressor/index.md",
-    [threshold, ratio, blend, attack, release, hpf],
+    [threshold, ratio, blend, attack, release, hpf, sidechain_listen],
     name="STRING_FOR_COMMUNITY_FEATURE_MASTER_COMPRESSOR",
 )

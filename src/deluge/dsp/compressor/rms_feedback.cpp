@@ -129,13 +129,75 @@ void RMSFeedbackCompressor::render(std::span<StereoSample> buffer, q31_t volAdju
 
 void RMSFeedbackCompressor::renderWithExternalSidechain(std::span<StereoSample> buffer,
                                                         std::span<StereoSample> sidechainBuffer, q31_t finalVolume) {
-	// Feedforward mode: detect envelope from external sidechain, apply gain reduction to target.
-	// Set rms from sidechain buffer, then render. render() will overwrite rms via calcRMS(buffer)
-	// at the end (feedback path), so we save and restore the sidechain rms value.
-	float sidechainRms = calcRMS(sidechainBuffer);
-	rms = sidechainRms;
-	renderVolNeutral(buffer, finalVolume);
-	rms = sidechainRms; // restore so next window uses sidechain, not feedback
+	// Feedforward/external sidechain mode: detect envelope from sidechain bus,
+	// apply gain reduction to the target buffer. Unlike feedback mode, we do NOT
+	// apply automatic makeup gain (er) because there is no feedback loop to
+	// self-limit — the sidechain signal is independent of the output level.
+
+	// make a copy for blending if we need to
+	if (wet != ONE_Q31) {
+		memcpy(dryBuffer.data(), buffer.data(), buffer.size_bytes());
+	}
+
+	if (!onLastTime) {
+		lastSaturationTanHWorkingValue[0] =
+		    (uint32_t)lshiftAndSaturateUnknown(buffer[0].l, saturationAmount) + 2147483648u;
+		lastSaturationTanHWorkingValue[1] =
+		    (uint32_t)lshiftAndSaturateUnknown(buffer[0].r, saturationAmount) + 2147483648u;
+		onLastTime = true;
+	}
+
+	// Detect from sidechain bus
+	rms = calcRMS(sidechainBuffer);
+
+	// Compute threshold relative to the sidechain signal's own level.
+	// calcRMS returns log-space values typically ranging 0 (silence) to ~17 (full scale).
+	// We use a fixed reference level (log of full-scale q31) so the threshold knob
+	// maps consistently regardless of the receiving track's volume.
+	constexpr float fullScaleLog = 16.6f; // approximately log(2^24)
+	float scThreshdb = fullScaleLog * threshold;
+
+	float over = std::max<float>(0, (rms - scThreshdb));
+	state = runEnvelope(state, over, buffer.size());
+	float reduction = -state * fraction;
+
+	// Apply gain reduction with the base gain needed for unity in the fixed-point pipeline,
+	// but WITHOUT the automatic makeup gain (er) that the feedback compressor uses.
+	// baseGain_ compensates for the fixed-point scaling in the sample loop.
+	float gain = std::exp(baseGain_ + reduction);
+	gain = std::min<float>(gain, 31);
+
+	// Volume-neutral application: use unity volAdjust (1 << 27) like renderVolNeutral
+	constexpr q31_t volAdjust = 1 << 27;
+	float finalVolumeL = gain * float(volAdjust >> 9);
+	float finalVolumeR = gain * float(volAdjust >> 9);
+
+	q31_t amplitudeIncrementL = ((int32_t)((finalVolumeL - (currentVolumeL >> 8)) / float(buffer.size()))) << 8;
+	q31_t amplitudeIncrementR = ((int32_t)((finalVolumeR - (currentVolumeR >> 8)) / float(buffer.size()))) << 8;
+
+	auto dry_it = dryBuffer.begin();
+	for (StereoSample& sample : buffer) {
+		currentVolumeL += amplitudeIncrementL;
+		currentVolumeR += amplitudeIncrementR;
+
+		sample.l = multiply_32x32_rshift32(sample.l, currentVolumeL) << 4;
+		sample.l = getTanHAntialiased(sample.l, &lastSaturationTanHWorkingValue[0], saturationAmount);
+
+		sample.r = multiply_32x32_rshift32(sample.r, currentVolumeR) << 4;
+		sample.r = getTanHAntialiased(sample.r, &lastSaturationTanHWorkingValue[1], saturationAmount);
+
+		if (wet != ONE_Q31) {
+			sample.l = multiply_32x32_rshift32(sample.l, wet);
+			sample.l = multiply_accumulate_32x32_rshift32_rounded(sample.l, dry_it->l, dry);
+			sample.l <<= 1;
+			sample.r = multiply_32x32_rshift32(sample.r, wet);
+			sample.r = multiply_accumulate_32x32_rshift32_rounded(sample.r, dry_it->r, dry);
+			sample.r <<= 1;
+			++dry_it;
+		}
+	}
+
+	gainReduction = std::clamp<int32_t>(-(reduction) * 4 * 4, 0, 127);
 }
 
 float RMSFeedbackCompressor::runEnvelope(float current, float desired, float numSamples) const {

@@ -34,13 +34,15 @@ audio_compressor::Blend compBlend{STRING_FOR_BLEND, STRING_FOR_BLEND};
 audio_compressor::Attack compAttack{STRING_FOR_ATTACK, STRING_FOR_ATTACK};
 audio_compressor::Release compRelease{STRING_FOR_RELEASE, STRING_FOR_RELEASE};
 audio_compressor::SideHPF compHPF{STRING_FOR_HPF, STRING_FOR_HPF};
-std::array<MenuItem*, 6> child3 = {
+audio_compressor::SidechainListen compSidechainListen{STRING_FOR_SIDECHAIN, STRING_FOR_SIDECHAIN};
+std::array<MenuItem*, 7> child3 = {
     &threshold,
     &compRatio,
     &compBlend,
     &compAttack,
     &compRelease,
     &compHPF,
+    &compSidechainListen,
 };
 HorizontalMenu audioCompMenu{STRING_FOR_COMMUNITY_FEATURE_MASTER_COMPRESSOR, child3};
 unison::CountToStereoSpread numUnisonMenu{STRING_FOR_UNISON_NUMBER, STRING_FOR_UNISON_NUMBER_MENU_TITLE};
