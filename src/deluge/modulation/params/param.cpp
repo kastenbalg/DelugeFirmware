@@ -287,11 +287,12 @@ char const* getParamDisplayName(Kind kind, int32_t p) {
 		return l10n::get(NAMES[p]);
 	}
 
-	if (kind == Kind::EXPRESSION && p < kNumExpressionDimensions) {
-		static l10n::String const NAMES[kNumExpressionDimensions] = {
+	if (kind == Kind::EXPRESSION && p < kNumExpressionParams) {
+		static l10n::String const NAMES[kNumExpressionParams] = {
 		    [Expression::X_PITCH_BEND] = STRING_FOR_PITCH_BEND,
 		    [Expression::Y_SLIDE_TIMBRE] = STRING_FOR_MOD_WHEEL,
 		    [Expression::Z_PRESSURE] = STRING_FOR_CHANNEL_PRESSURE,
+		    [Expression::SUSTAIN_PEDAL] = STRING_FOR_SUSTAIN_PEDAL,
 		};
 		return l10n::get(NAMES[p]);
 	}

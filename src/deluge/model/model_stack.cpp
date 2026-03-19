@@ -270,7 +270,7 @@ ModelStackWithAutoParam* ModelStackWithThreeMainThings::getPatchCableAutoParamFr
 }
 
 ModelStackWithAutoParam* ModelStackWithThreeMainThings::getExpressionAutoParamFromID(int32_t newParamId) {
-	if (newParamId >= kNumExpressionDimensions) {
+	if (newParamId >= kNumExpressionParams) {
 		return addParamCollectionAndId(nullptr, nullptr, 0)->addAutoParam(nullptr); // "No param"
 	}
 

@@ -1570,8 +1570,18 @@ void Sound::noteOff(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBase* 
 	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStack->addSoundFlags();
 	ArpeggiatorSettings* arpSettings = getArpSettings();
 
+	// Check if sustain pedal is active
+	bool sustainActive = false;
+	if (!isDrum()) {
+		auto* paramManager = static_cast<ParamManagerForTimeline*>(modelStack->paramManager);
+		ExpressionParamSet* expressionParams = paramManager->getExpressionParamSet();
+		if (expressionParams) {
+			sustainActive = expressionParams->params[Expression::SUSTAIN_PEDAL].getCurrentValue() >= 0;
+		}
+	}
+
 	ArpReturnInstruction instruction;
-	arpeggiator->noteOff(arpSettings, noteCode, &instruction);
+	arpeggiator->noteOff(arpSettings, noteCode, &instruction, sustainActive);
 
 	for (int32_t n = 0; n < ARP_MAX_INSTRUCTION_NOTES; n++) {
 		if (instruction.glideNoteCodeOffPostArp[n] == ARP_NOTE_NONE) {
@@ -1906,7 +1916,7 @@ void Sound::noteOffPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t
 
 			else {
 justSwitchOff:
-				voice->noteOff(modelStack);
+				voice->noteOff(modelStack, true, noteCode == ALL_NOTES_OFF);
 			}
 		}
 	}

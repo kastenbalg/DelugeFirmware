@@ -216,7 +216,7 @@ void ArpeggiatorForDrum::noteOn(ArpeggiatorSettings* settings, int32_t noteCode,
 }
 
 void ArpeggiatorForDrum::noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp,
-                                 ArpReturnInstruction* instruction) {
+                                 ArpReturnInstruction* instruction, bool sustainActive) {
 
 	// If no arpeggiation...
 	if ((settings == nullptr) || settings->mode == ArpMode::OFF) {
@@ -375,13 +375,27 @@ void Arpeggiator::noteOn(ArpeggiatorSettings* settings, int32_t noteCode, int32_
 	}
 }
 
-void Arpeggiator::noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction) {
+void Arpeggiator::noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction,
+                          bool sustainActive) {
 	int32_t notesKey = notes.search(noteCodePreArp, GREATER_OR_EQUAL);
 	if (notesKey < notes.getNumElements()) {
 
 		ArpNote* arpNote = (ArpNote*)notes.getElementAddress(notesKey);
 		if (arpNote->inputCharacteristics[util::to_underlying(MIDICharacteristic::NOTE)] == noteCodePreArp) {
 			bool arpOff = (settings == nullptr) || settings->mode == ArpMode::OFF;
+
+			// If sustain pedal is active and arp is ON, keep the note in the pool
+			// but mark it as sustained so it can be released later
+			if (sustainActive && !arpOff) {
+				// Mark all note statuses as sustained (keep in pool for arp to continue using)
+				for (int32_t n = 0; n < ARP_MAX_INSTRUCTION_NOTES; n++) {
+					if (arpNote->noteStatus[n] != ArpNoteStatus::OFF) {
+						arpNote->noteStatus[n] = ArpNoteStatus::SUSTAINED;
+					}
+				}
+				return; // Don't delete from pool — arp keeps playing this note
+			}
+
 			// If no arpeggiation...
 			if (arpOff) {
 				instruction->noteCodeOffPostArp[0] = noteCodePreArp;
@@ -473,6 +487,27 @@ void Arpeggiator::noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp,
 		playedFirstArpeggiatedNoteYet = false;
 	}
 }
+
+void Arpeggiator::releaseSustainedNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction) {
+	// Release all notes marked as SUSTAINED by calling noteOff for each one
+	// Iterate in reverse since noteOff deletes from the array
+	for (int32_t i = notes.getNumElements() - 1; i >= 0; i--) {
+		ArpNote* arpNote = (ArpNote*)notes.getElementAddress(i);
+		bool isSustained = false;
+		for (int32_t n = 0; n < ARP_MAX_INSTRUCTION_NOTES; n++) {
+			if (arpNote->noteStatus[n] == ArpNoteStatus::SUSTAINED) {
+				isSustained = true;
+				break;
+			}
+		}
+		if (isSustained) {
+			int32_t noteCode = arpNote->inputCharacteristics[util::to_underlying(MIDICharacteristic::NOTE)];
+			ArpReturnInstruction releaseInstruction;
+			noteOff(settings, noteCode, &releaseInstruction, false); // sustainActive=false to actually release
+		}
+	}
+}
+
 bool Arpeggiator::handlePendingNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction) {
 	if ((settings != nullptr) && settings->mode == ArpMode::OFF) {
 		// if off make sure there aren't any notes waiting to start

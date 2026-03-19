@@ -150,6 +150,7 @@ enum class ArpNoteStatus : uint8_t {
 	OFF,
 	PENDING,
 	PLAYING,
+	SUSTAINED, // Key released but held by sustain pedal — stays in note pool
 };
 
 struct ArpNote {
@@ -222,7 +223,10 @@ public:
 
 	virtual void noteOn(ArpeggiatorSettings* settings, int32_t noteCode, int32_t velocity,
 	                    ArpReturnInstruction* instruction, int32_t fromMIDIChannel, int16_t const* mpeValues) = 0;
-	virtual void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction) = 0;
+	virtual void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction,
+	                     bool sustainActive = false) = 0;
+	/// Release all notes held by sustain pedal. Returns note-off instructions via the instruction parameter.
+	virtual void releaseSustainedNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction) {};
 	/// Looks for pending notes and sets arp return to the pending note if found
 	/// Returns true if it sets the arp return note
 	virtual bool handlePendingNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction);
@@ -335,7 +339,8 @@ public:
 	ArpeggiatorForDrum();
 	void noteOn(ArpeggiatorSettings* settings, int32_t noteCode, int32_t velocity, ArpReturnInstruction* instruction,
 	            int32_t fromMIDIChannel, int16_t const* mpeValues) override;
-	void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction) override;
+	void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction,
+	             bool sustainActive = false) override;
 	void reset() override;
 	ArpType getArpType() override { return ArpType::DRUM; }
 	int16_t noteForDrum{0};
@@ -357,7 +362,9 @@ public:
 
 	void noteOn(ArpeggiatorSettings* settings, int32_t noteCode, int32_t velocity, ArpReturnInstruction* instruction,
 	            int32_t fromMIDIChannel, int16_t const* mpeValues) override;
-	void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction) override;
+	void noteOff(ArpeggiatorSettings* settings, int32_t noteCodePreArp, ArpReturnInstruction* instruction,
+	             bool sustainActive = false) override;
+	void releaseSustainedNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction) override;
 	bool handlePendingNotes(ArpeggiatorSettings* settings, ArpReturnInstruction* instruction) override;
 	bool hasAnyInputNotesActive() override;
 	// This array tracks the notes ordered by noteCode

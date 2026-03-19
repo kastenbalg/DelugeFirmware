@@ -564,6 +564,9 @@ ExpressionParamSet::ExpressionParamSet(ParamCollectionSummary* summary, bool for
 
 	bendRanges[BEND_RANGE_FINGER_LEVEL] =
 	    forDrum ? bendRanges[BEND_RANGE_MAIN] : FlashStorage::defaultBendRange[BEND_RANGE_FINGER_LEVEL];
+
+	// Sustain pedal defaults to "off" (negative = not pressed)
+	params_[Expression::SUSTAIN_PEDAL].setCurrentValueBasicForSetup(-2147483648);
 }
 
 void ExpressionParamSet::beenCloned(bool copyAutomation, int32_t reverseDirectionWithLength) {
@@ -625,13 +628,13 @@ int32_t ExpressionParamSet::paramValueToKnobPos(int32_t paramValue, ModelStackWi
 	return knobPos;
 }
 
-char const* expressionParamNames[] = {"pitchBend", "yExpression", "pressure"};
+char const* expressionParamNames[] = {"pitchBend", "yExpression", "pressure", "sustainPedal"};
 
 bool ExpressionParamSet::writeToFile(Serializer& writer, bool mustWriteOpeningTagEndFirst) {
 
 	bool writtenAnyYet = false;
 
-	for (int32_t p = 0; p < kNumExpressionDimensions; p++) {
+	for (int32_t p = 0; p < kNumExpressionParams; p++) {
 		if (params[p].containsSomething()) {
 			if (!writtenAnyYet) {
 				writtenAnyYet = true;
@@ -660,7 +663,7 @@ void ExpressionParamSet::readFromFile(Deserializer& reader, ParamCollectionSumma
 
 	while (*(tagName = reader.readNextTagOrAttributeName())) {
 		int32_t p;
-		for (p = 0; p < kNumExpressionDimensions; p++) {
+		for (p = 0; p < kNumExpressionParams; p++) {
 			if (!strcmp(tagName, expressionParamNames[p])) {
 doReadParam:
 				readParam(reader, summary, p, readAutomationUpToPos);
@@ -683,9 +686,9 @@ finishedTag:
 void ExpressionParamSet::moveRegionHorizontally(ModelStackWithParamCollection* modelStack, int32_t pos, int32_t length,
                                                 int32_t offset, int32_t lengthBeforeLoop, Action* action) {
 
-	// Because this is just for ExpressionParamSet, which only has 3 params, let's just do it for all of them rather
+	// Because this is just for ExpressionParamSet, which only has a few params, let's just do it for all of them rather
 	// than our other optimization.
-	for (int32_t p = 0; p < kNumExpressionDimensions; p++) {
+	for (int32_t p = 0; p < kNumExpressionParams; p++) {
 		AutoParam* param = &params[p];
 		ModelStackWithAutoParam* modelStackWithAutoParam = modelStack->addAutoParam(p, param);
 		param->moveRegionHorizontally(modelStackWithAutoParam, pos, length, offset, lengthBeforeLoop, action);
@@ -693,7 +696,7 @@ void ExpressionParamSet::moveRegionHorizontally(ModelStackWithParamCollection* m
 }
 
 void ExpressionParamSet::clearValues(ModelStackWithParamCollection const* modelStack) {
-	for (int32_t p = 0; p < kNumExpressionDimensions; p++) {
+	for (int32_t p = 0; p < kNumExpressionParams; p++) {
 		AutoParam* param = &params[p];
 		ModelStackWithAutoParam* modelStackWithAutoParam = modelStack->addAutoParam(p, param);
 		param->setCurrentValueWithNoReversionOrRecording(modelStackWithAutoParam, 0);
@@ -701,7 +704,7 @@ void ExpressionParamSet::clearValues(ModelStackWithParamCollection const* modelS
 }
 
 void ExpressionParamSet::cancelAllOverriding() {
-	for (int32_t p = 0; p < kNumExpressionDimensions; p++) {
+	for (int32_t p = 0; p < kNumExpressionParams; p++) {
 		AutoParam* param = &params[p];
 		param->cancelOverriding();
 	}

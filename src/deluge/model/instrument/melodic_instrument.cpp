@@ -26,10 +26,14 @@
 #include "model/action/action_logger.h"
 #include "model/clip/instrument_clip.h"
 #include "model/instrument/midi_instrument.h"
+#include "model/model_stack.h"
 #include "model/settings/runtime_feature_settings.h"
+#include "model/voice/voice.h"
 #include "modulation/arpeggiator.h"
+#include "modulation/params/param_set.h"
 #include "playback/mode/session.h"
 #include "playback/playback_handler.h"
+#include "processing/sound/sound_instrument.h"
 #include <cstdint>
 #include <cstring>
 #include <ranges>
@@ -385,6 +389,19 @@ void MelodicInstrument::receivedCC(ModelStackWithTimelineCounter* modelStackWith
 				*doingMidiThru = false;
 			}
 		}
+		// CC64 sustain pedal — route to ExpressionParamSet for internal synths (records as automation)
+		if (ccNumber == CC_EXTERNAL_SUSTAIN_PEDAL
+		    && runtimeFeatureSettings.isOn(RuntimeFeatureSettingType::EnableSustainPedal)) {
+			int32_t paramValue = (value >= 64) ? 2147483647 : -2147483648;
+			processParamFromInputMIDIChannel(CC_NUMBER_SUSTAIN_PEDAL, paramValue, modelStackWithTimelineCounter);
+
+			// If pedal released, trigger release of any voices held by sustain
+			if (value < 64) {
+				releaseSustainedVoices(modelStackWithTimelineCounter);
+			}
+			return;
+		}
+
 		if (ccNumber == CC_EXTERNAL_MOD_WHEEL) {
 			// this is the same range as mpe Y axis but unipolar
 			value32 = (value) << 24;
@@ -516,8 +533,40 @@ void MelodicInstrument::stopAnyAuditioning(ModelStack* modelStack) {
 	notesAuditioned.clear();
 	earlyNotes.clear(); // This is fine, though in a perfect world we'd prefer to just mark the notes as no
 	                    // longer active
+	// Reset sustain pedal param so note-offs are not deferred
+	if (runtimeFeatureSettings.isOn(RuntimeFeatureSettingType::EnableSustainPedal)) {
+		ModelStackWithTimelineCounter* modelStackWithTimelineCounter = modelStack->addTimelineCounter(activeClip);
+		processParamFromInputMIDIChannel(CC_NUMBER_SUSTAIN_PEDAL, -2147483648, modelStackWithTimelineCounter);
+	}
+
 	if (activeClip) {
 		activeClip->expectEvent(); // Because the absence of auditioning here means sequenced notes may play
+	}
+}
+
+void MelodicInstrument::releaseSustainedVoices(ModelStackWithTimelineCounter* modelStack) {
+	if (type != OutputType::SYNTH) {
+		return;
+	}
+
+	auto* soundInstrument = static_cast<SoundInstrument*>(this);
+
+	// Release arp sustained notes first — this removes them from the arp pool
+	// and generates note-off instructions that will flow through to voices
+	ArpeggiatorSettings* arpSettings = soundInstrument->getArpSettings();
+	ArpReturnInstruction instruction;
+	soundInstrument->getArp()->releaseSustainedNotes(arpSettings, &instruction);
+
+	ModelStackWithNoteRow* modelStackWithNoteRow = modelStack->addNoteRow(0, nullptr);
+	ModelStackWithThreeMainThings* modelStackWith3Things =
+	    modelStackWithNoteRow->addOtherTwoThings(toModControllable(), getParamManager(modelStack->song));
+	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStackWith3Things->addSoundFlags();
+
+	// Release any voices still held by voice-level sustain (arp OFF case)
+	for (const auto& voice : soundInstrument->voices()) {
+		if ((voice->pedalState & Voice::PedalState::SustainDeferred) != Voice::PedalState::None) {
+			voice->noteOff(modelStackWithSoundFlags, true, true); // ignoreSustain — force release
+		}
 	}
 }
 
@@ -617,6 +666,10 @@ MelodicInstrument::getParamToControlFromInputMIDIChannel(int32_t cc, ModelStackW
 
 	case CC_NUMBER_AFTERTOUCH:
 		paramId = 2;
+		break;
+
+	case CC_NUMBER_SUSTAIN_PEDAL:
+		paramId = Expression::SUSTAIN_PEDAL;
 		break;
 
 	default:

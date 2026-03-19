@@ -716,13 +716,15 @@ enum class ExistenceChangeType {
 enum CCNumber {
 	/// note - only for incoming/outgoing midi. Internally use CC_NUMBER_Y_AXIS
 	CC_EXTERNAL_MOD_WHEEL = 1,
+	CC_EXTERNAL_SUSTAIN_PEDAL = 64,
 	CC_EXTERNAL_MPE_Y = 74,
 	CC_NUMBER_PITCH_BEND = 120,
 	CC_NUMBER_AFTERTOUCH = 121,
 	CC_NUMBER_Y_AXIS = 122,
-	CC_NUMBER_NONE = 123,
+	CC_NUMBER_SUSTAIN_PEDAL = 123,
+	CC_NUMBER_NONE = 124,
 };
-constexpr int32_t kNumCCNumbersIncludingFake = 124;
+constexpr int32_t kNumCCNumbersIncludingFake = 125;
 constexpr int32_t kNumCCExpression = kNumCCNumbersIncludingFake - 1;
 constexpr int32_t kNumRealCCNumbers = 120;
 constexpr int32_t kMaxMIDIValue = 127;
@@ -912,12 +914,16 @@ constexpr int32_t kWavetableMaxCycleSize = 65536; // TODO: work out what this sh
 
 constexpr int32_t kMaxImageStoreWidth = kDisplayWidth;
 
+/// Number of MPE/MIDI expression dimensions (pitch bend, Y, pressure)
 constexpr int32_t kNumExpressionDimensions = 3;
+/// Number of params stored in ExpressionParamSet (MPE dims + sustain pedal)
+constexpr int32_t kNumExpressionParams = 4;
 
 enum Expression {
 	X_PITCH_BEND,
 	Y_SLIDE_TIMBRE,
 	Z_PRESSURE,
+	SUSTAIN_PEDAL,
 };
 
 constexpr int32_t MIDI_CHANNEL_MPE_LOWER_ZONE = 16;

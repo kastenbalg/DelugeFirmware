@@ -158,6 +158,10 @@ noParam:
 
 	case CC_NUMBER_AFTERTOUCH:
 		paramId = 2;
+		goto expressionParam;
+
+	case CC_NUMBER_SUSTAIN_PEDAL:
+		paramId = Expression::SUSTAIN_PEDAL;
 expressionParam:
 		modelStack->paramManager->ensureExpressionParamSetExists(); // Allowed to fail
 		summary = modelStack->paramManager->getExpressionParamSetSummary();
@@ -685,7 +689,7 @@ Error MIDIInstrument::moveAutomationToDifferentCC(int32_t oldCC, int32_t newCC,
 		if (modelStackWithAutoParam->paramCollection != modelStack->paramManager->getExpressionParamSet()) {
 			FREEZE_WITH_ERROR("E415");
 		}
-		if (modelStackWithAutoParam->paramId >= kNumExpressionDimensions) {
+		if (modelStackWithAutoParam->paramId >= kNumExpressionParams) {
 			FREEZE_WITH_ERROR("E416");
 		}
 #endif

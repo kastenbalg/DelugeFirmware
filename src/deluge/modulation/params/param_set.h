@@ -152,5 +152,5 @@ public:
 	uint8_t bendRanges[2];
 
 private:
-	std::array<AutoParam, kNumExpressionDimensions> params_;
+	std::array<AutoParam, kNumExpressionParams> params_;
 };
