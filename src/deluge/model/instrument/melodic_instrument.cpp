@@ -390,8 +390,7 @@ void MelodicInstrument::receivedCC(ModelStackWithTimelineCounter* modelStackWith
 			}
 		}
 		// CC64 sustain pedal — route to ExpressionParamSet for internal synths (records as automation)
-		if (ccNumber == CC_EXTERNAL_SUSTAIN_PEDAL
-		    && runtimeFeatureSettings.isOn(RuntimeFeatureSettingType::EnableSustainPedal)) {
+		if (ccNumber == CC_EXTERNAL_SUSTAIN_PEDAL) {
 			int32_t paramValue = (value >= 64) ? 2147483647 : -2147483648;
 			processParamFromInputMIDIChannel(CC_NUMBER_SUSTAIN_PEDAL, paramValue, modelStackWithTimelineCounter);
 
@@ -534,7 +533,7 @@ void MelodicInstrument::stopAnyAuditioning(ModelStack* modelStack) {
 	earlyNotes.clear(); // This is fine, though in a perfect world we'd prefer to just mark the notes as no
 	                    // longer active
 	// Reset sustain pedal param so note-offs are not deferred
-	if (runtimeFeatureSettings.isOn(RuntimeFeatureSettingType::EnableSustainPedal)) {
+	{
 		ModelStackWithTimelineCounter* modelStackWithTimelineCounter = modelStack->addTimelineCounter(activeClip);
 		processParamFromInputMIDIChannel(CC_NUMBER_SUSTAIN_PEDAL, -2147483648, modelStackWithTimelineCounter);
 	}
