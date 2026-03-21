@@ -17,6 +17,7 @@
 
 #include "gui/ui_timer_manager.h"
 #include "definitions_cxx.hpp"
+#include "extern.h"
 #include "gui/ui/keyboard/keyboard_screen.h"
 #include "gui/ui/sound_editor.h"
 #include "gui/views/automation_view.h"
@@ -151,7 +152,10 @@ void UITimerManager::routine() {
 					break;
 				}
 				case TimerName::BACK_MENU_EXIT: {
-
+					if (sdRoutineLock) {
+						setTimer(TimerName::BACK_MENU_EXIT, 50);
+						break;
+					}
 					getCurrentUI()->exitUI();
 					break;
 				}
