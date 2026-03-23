@@ -43,10 +43,11 @@
 static void freeRTOSTickISR(uint32_t intSense) {
 	timerClearCompareMatchTGRA(TICK_TIMER);
 
-	/* In Phase 1 with a single application task, we only need to increment
-	 * the tick counter. No context switch is required because there is only
-	 * one app task (plus idle, which never runs while the app task is active). */
-	xTaskIncrementTick();
+	/* Increment the RTOS tick and request a context switch if a higher-priority
+	 * task (e.g., the audio task) was unblocked by this tick. The FreeRTOS
+	 * IRQ handler checks ulPortYieldRequired on exit and performs the switch. */
+	BaseType_t xSwitchRequired = xTaskIncrementTick();
+	portYIELD_FROM_ISR(xSwitchRequired);
 }
 
 void vConfigureTickInterrupt(void) {
