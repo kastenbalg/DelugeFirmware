@@ -4735,10 +4735,10 @@ void Sound::deleteMultiRange(int32_t s, int32_t r) {
 	// Because range storage is about to change, must unassign all voices, and make sure no more can be assigned
 	// during memory allocation
 	killAllVoices();
-	AudioEngine::audioRoutineLocked = true;
+	AudioEngine::audioMutexLock();
 	sources[s].ranges.getElement(r)->~MultiRange();
 	sources[s].ranges.deleteAtIndex(r);
-	AudioEngine::audioRoutineLocked = false;
+	AudioEngine::audioMutexUnlock();
 }
 
 // This function has to give the same outcome as Source::renderInStereo()

@@ -35,7 +35,7 @@
 extern "C" {
 #include "RZA1/uart/sio_char.h"
 
-volatile uint32_t usbLock = 0;
+volatile uint32_t usbLock = 0; // Legacy — replaced by usbMutex under FreeRTOS
 void usb_cstd_usb_task();
 
 #include "RZA1/system/iodefine.h"

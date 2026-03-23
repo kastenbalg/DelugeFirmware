@@ -16,11 +16,14 @@
  */
 #ifndef RESOURCE_CHECKER_H
 #define RESOURCE_CHECKER_H
+#include <OSLikeStuff/freertos/freertos_mutex.h>
 #include <OSLikeStuff/scheduler_api.h>
 #include <bitset>
 #include <extern.h>
 extern uint8_t currentlyAccessingCard;
 extern uint32_t usbLock;
+extern rtos_mutex_t sdCardMutex;
+extern rtos_mutex_t usbMutex;
 // this is basically a bitset however the enums need to be exposed to C code and this is easier to keep synced
 class ResourceChecker {
 	uint32_t resources_{0};
@@ -29,7 +32,9 @@ public:
 	ResourceChecker() = default;
 	ResourceChecker(ResourceID resources) : resources_(resources) {};
 	/// returns whether all resources are available. This is basically shitty priority ceiling to avoid the potential of
-	/// a task locking one resource and then trying to yield while it waits for another
+	/// a task locking one resource and then trying to yield while it waits for another.
+	/// Checks both FreeRTOS mutexes and legacy booleans — some locks (e.g. usbLock in ISR context) can only use
+	/// booleans, while cross-task locks use mutexes.
 	bool checkResources() const {
 		if (resources_ == RESOURCE_NONE) {
 			return true;
@@ -37,12 +42,15 @@ public:
 		bool anythingLocked = false;
 		if ((resources_ & RESOURCE_SD) != 0u) {
 			anythingLocked |= currentlyAccessingCard;
+			anythingLocked |= rtos_mutex_is_locked(sdCardMutex);
 		}
 		if ((resources_ & RESOURCE_USB) != 0u) {
-			anythingLocked |= usbLock;
+			anythingLocked |= (bool)usbLock;
+			anythingLocked |= rtos_mutex_is_locked(usbMutex);
 		}
 		if ((resources_ & RESOURCE_SD_ROUTINE) != 0u) {
 			anythingLocked |= sdRoutineLock;
+			anythingLocked |= rtos_mutex_is_locked(sdRoutineMutex);
 		}
 		return !anythingLocked;
 	}

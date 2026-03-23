@@ -32,6 +32,7 @@
 #include "RZA1/system/r_typedefs.h"
 #include "definitions.h"
 
+#include "OSLikeStuff/freertos/freertos_mutex.h"
 #include "RZA1/compiler/asm/inc/asm.h"
 #include "RZA1/rspi/rspi.h"
 #include "RZA1/sdhi/inc/sdif.h"
@@ -42,6 +43,13 @@
 #include "ff.h"
 
 uint8_t currentlyAccessingCard = 0;
+static rtos_mutex_storage_t sSdCardMutexStorage;
+rtos_mutex_t sdCardMutex;
+
+void initSdCardMutex(void)
+{
+    sdCardMutex = rtos_mutex_create(&sSdCardMutexStorage);
+}
 
 #define _USE_WRITE 1 /* 1: Enable disk_write function */
 #define _USE_IOCTL 1 /* 1: Enable disk_ioctl fucntion */
@@ -138,9 +146,11 @@ DSTATUS disk_initialize(BYTE pdrv /* Physical drive nmuber to identify the drive
         return SD_ERR_NO_CARD;
 
     // Try initializing, configuring and mounting card; return on error
+    rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
     int error              = sd_init(SD_PORT, SDCFG_IP1_BASE, &initializationWorkArea[0], SD_CD_SOCKET);
     currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
     if (error)
     {
 processError:
@@ -160,9 +170,11 @@ processError:
     if (error)
         goto processError;
 
+    rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
     error                  = sd_mount(SD_PORT, SDCFG_DRIVER_MODE, SD_VOLT_3_3);
     currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
     if (error)
         goto processError;
 
@@ -204,11 +216,13 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
 
     // uint16_t startTime = MTU2.TCNT_0;
 
+    rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
 
     err = sd_read_sect(SD_PORT, buff, sector, count);
 
     currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
 
     /*
     uint16_t endTime = MTU2.TCNT_0;
@@ -251,11 +265,13 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
         }
     }
 
+    rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
 
     err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
 
     currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
 
     if (err == 0)
     {

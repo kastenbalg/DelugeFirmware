@@ -550,13 +550,12 @@ void PlaybackHandler::setupPlayback(int32_t newPlaybackState, int32_t playFromPo
 	}
 
 	// May not call audio routine during this, cos that'd try doing ticks before everything's set up
-	bool oldState = AudioEngine::audioRoutineLocked;
-	AudioEngine::audioRoutineLocked = true;
+	AudioEngine::audioMutexLock();
 	currentlyActioningSwungTickOrResettingPlayPos = true;
 	// Have to do this after calling AudioEngine::routine()
 	currentPlaybackMode->resetPlayPos(playFromPos, !ticksLeftInCountIn, buttonPressLatencyForTempolessRecord);
 	currentlyActioningSwungTickOrResettingPlayPos = false;
-	AudioEngine::audioRoutineLocked = oldState;
+	AudioEngine::audioMutexUnlock();
 
 	posToNextContinuePlaybackFrom = playFromPos;
 
