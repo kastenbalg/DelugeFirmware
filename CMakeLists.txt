@@ -178,6 +178,7 @@ add_compile_options(
     -ffunction-sections
     -fdata-sections
     -DUSE_TASK_MANAGER
+    -DUSE_FREERTOS
 
     # C++ stuff
     $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
@@ -199,6 +200,7 @@ add_executable(deluge)
 target_link_libraries(deluge PUBLIC
         argon
         etl::etl
+        freertos_kernel
 )
 
 option(MAINTAINER_MODE "Enables all warnings and errors" OFF)

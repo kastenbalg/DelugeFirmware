@@ -15,3 +15,12 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(etl)
+
+FetchContent_Declare(freertos_kernel
+        GIT_REPOSITORY https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+        GIT_TAG V11.1.0
+)
+set(FREERTOS_PORT GCC_ARM_CA9 CACHE STRING "" FORCE)
+set(FREERTOS_CONFIG_FILE_DIRECTORY
+        "${CMAKE_SOURCE_DIR}/src/OSLikeStuff/freertos" CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(freertos_kernel)
