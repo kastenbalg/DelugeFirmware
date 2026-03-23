@@ -19,7 +19,11 @@
 #pragma once
 
 #include <cstdint>
-extern bool sdRoutineLock;
+extern bool sdRoutineLock; // Legacy — replaced by sdRoutineMutex under FreeRTOS
+#include "OSLikeStuff/freertos/freertos_mutex.h"
+extern rtos_mutex_t sdRoutineMutex;
+extern rtos_mutex_t usbMutex;
+extern rtos_mutex_t sdCardMutex;
 extern int16_t zeroMPEValues[];
 extern bool allowSomeUserActionsEvenWhenInCardRoutine;
 extern bool readButtonsAndPads();

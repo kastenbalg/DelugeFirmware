@@ -1688,7 +1688,7 @@ Error InstrumentClip::changeInstrument(ModelStackWithTimelineCounter* modelStack
 
 	AudioEngine::routineWithClusterLoading();
 
-	AudioEngine::audioRoutineLocked = true;
+	AudioEngine::audioMutexLock();
 
 	/* Further stuff to optimize in here:
 	 * -- Delete surplus NoteRows in advance (must stop those Drums playing)
@@ -1744,7 +1744,7 @@ Error InstrumentClip::changeInstrument(ModelStackWithTimelineCounter* modelStack
 	}
 
 	// Can safely call audio routine again now
-	AudioEngine::audioRoutineLocked = false;
+	AudioEngine::audioMutexUnlock();
 	AudioEngine::bypassCulling = true;
 	AudioEngine::logAction("bypassing culling in change instrument");
 	AudioEngine::routineWithClusterLoading();

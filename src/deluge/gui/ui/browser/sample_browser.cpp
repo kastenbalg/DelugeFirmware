@@ -1676,9 +1676,9 @@ doReturnFalse:
 	// it's going to use
 	if (numSamples > 1) {
 		soundEditor.currentSound->killAllVoices();
-		AudioEngine::audioRoutineLocked = true;
+		AudioEngine::audioMutexLock();
 		bool success = soundEditor.currentSource->ranges.ensureEnoughSpaceAllocated(numSamples - 1);
-		AudioEngine::audioRoutineLocked = false;
+		AudioEngine::audioMutexUnlock();
 
 		if (!success) {
 			delugeDealloc(sortArea);
@@ -1697,8 +1697,6 @@ doReturnFalse:
 	}
 
 	soundEditor.setCurrentMultiRange(0);
-
-	AudioEngine::audioRoutineLocked = false;
 
 	// If we've ended up with some samples a whole octave higher than the others, this may be in error
 	int32_t whichSampleIsAnOctaveUp = 0;

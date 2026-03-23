@@ -16,6 +16,12 @@
 uint8_t currentlyAccessingCard = false;
 uint32_t usbLock = false;
 bool sdRoutineLock = false;
+rtos_mutex_storage_t sdCardMutexStorage_;
+rtos_mutex_t sdCardMutex = &sdCardMutexStorage_;
+rtos_mutex_storage_t usbMutexStorage_;
+rtos_mutex_t usbMutex = &usbMutexStorage_;
+rtos_mutex_storage_t sdRoutineMutexStorage_;
+rtos_mutex_t sdRoutineMutex = &sdRoutineMutexStorage_;
 namespace {
 
 struct SelfRemoving {

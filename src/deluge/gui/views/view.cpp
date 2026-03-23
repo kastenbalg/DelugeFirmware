@@ -459,7 +459,7 @@ void View::startMIDILearn() {
 
 void View::endMIDILearn() {
 	if (shouldSaveSettingsAfterMidiLearn) {
-		if (!AudioEngine::audioRoutineLocked) {
+		if (!AudioEngine::audioMutexIsLocked()) {
 			FlashStorage::writeSettings(); // Rare case where we could have been called during audio routine
 		}
 	}

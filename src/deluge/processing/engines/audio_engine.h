@@ -196,7 +196,12 @@ extern uint32_t i2sTXBufferPos;
 extern uint32_t i2sRXBufferPos;
 extern int32_t cpuDireness;
 extern InputMonitoringMode inputMonitoringMode;
-extern bool audioRoutineLocked;
+extern bool audioRoutineLocked; // Legacy — use audioMutexLock()/audioMutexUnlock() under FreeRTOS
+void audioMutexLock();
+void audioMutexUnlock();
+bool audioMutexTryLock();
+bool audioMutexIsLocked();
+void audioMutexInit();
 extern bool routineBeenCalled;
 extern uint8_t numHopsEndedThisRoutineCall;
 extern SideChain reverbSidechain;

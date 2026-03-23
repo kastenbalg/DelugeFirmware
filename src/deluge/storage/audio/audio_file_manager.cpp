@@ -915,7 +915,7 @@ bool AudioFileManager::loadCluster(Cluster& cluster, int32_t minNumReasonsAfter)
 		return false;
 	}
 
-	if (AudioEngine::audioRoutineLocked) {
+	if (AudioEngine::audioMutexIsLocked()) {
 		return false;
 	}
 
@@ -1262,8 +1262,8 @@ void AudioFileManager::loadAnyEnqueuedClusters(int32_t maxNum, bool mayProcessUs
 		return; // One might be having stuff done to it, like having its data converted, but not actually reading
 		        // the card right now
 	}
-	if (AudioEngine::audioRoutineLocked) {
-		return; // Not sure if this should be neccesary?
+	if (AudioEngine::audioMutexIsLocked()) {
+		return;
 	}
 
 	// Cannot call any functions in here which will read the SD card, other than loadCluster(), otherwise that'll

@@ -17,6 +17,7 @@
 
 #include "processing/engines/audio_engine.h"
 
+#include "OSLikeStuff/freertos/freertos_mutex.h"
 #include "chrono"
 #include "definitions.h"
 #include "definitions_cxx.hpp"
@@ -172,6 +173,41 @@ uint32_t nextVoiceState = 1;
 bool renderInStereo = true;
 bool bypassCulling = false;
 bool audioRoutineLocked = false;
+static rtos_mutex_storage_t sAudioMutexStorage;
+static rtos_mutex_t sAudioMutex;
+
+void audioMutexInit() {
+	sAudioMutex = rtos_mutex_create(&sAudioMutexStorage);
+}
+
+void audioMutexLock() {
+	rtos_mutex_lock(sAudioMutex);
+#ifndef USE_FREERTOS
+	audioRoutineLocked = true;
+#endif
+}
+
+void audioMutexUnlock() {
+#ifndef USE_FREERTOS
+	audioRoutineLocked = false;
+#endif
+	rtos_mutex_unlock(sAudioMutex);
+}
+
+bool audioMutexTryLock() {
+	bool got = rtos_mutex_trylock(sAudioMutex);
+#ifndef USE_FREERTOS
+	if (got) {
+		audioRoutineLocked = true;
+	}
+#endif
+	return got;
+}
+
+bool audioMutexIsLocked() {
+	return rtos_mutex_is_locked(sAudioMutex);
+}
+
 uint32_t audioSampleTimer = 0;
 uint32_t i2sTXBufferPos;
 uint32_t i2sRXBufferPos;
@@ -999,28 +1035,33 @@ void scheduleMidiGateOutISR(uint32_t saddrPosAtStart, int32_t unadjustedNumSampl
 	}
 }
 
+static void routine_locked();
+
 void routine_task() {
-	if (audioRoutineLocked) {
+	if (!audioMutexTryLock()) {
 		logAction("AudioDriver::routine locked");
 		ignoreForStats();
-		return; // Prevents this from being called again from inside any e.g. memory allocation routines that get
-		        // called from within this!
+		return;
 	}
 	calledFromScheduler = true;
-	routine();
+	routine_locked();
 	calledFromScheduler = false;
+	audioMutexUnlock();
 }
 void routine() {
 
 	logAction("AudioDriver::routine");
 
-	if (audioRoutineLocked) {
+	if (!audioMutexTryLock()) {
 		logAction("AudioDriver::routine locked");
-		return; // Prevents this from being called again from inside any e.g. memory allocation routines that get
-		        // called from within this!
+		return;
 	}
+	routine_locked();
+	audioMutexUnlock();
+}
 
-	audioRoutineLocked = true;
+/* Called with the audio mutex already held. */
+static void routine_locked() {
 
 	numRoutines = 0;
 	if (!stemExport.processStarted || (stemExport.processStarted && !stemExport.renderOffline)) {
@@ -1058,7 +1099,6 @@ void routine() {
 			}
 		}
 	}
-	audioRoutineLocked = false;
 	routineBeenCalled = true;
 }
 

@@ -17,6 +17,7 @@
 
 #include "deluge.h"
 
+#include "OSLikeStuff/freertos/freertos_mutex.h"
 #include "RZA1/sdhi/inc/sdif.h"
 #include "definitions_cxx.hpp"
 #include "drivers/pic/pic.h"
@@ -91,6 +92,8 @@ extern uint8_t currentlyAccessingCard;
 
 extern "C" void disk_timerproc(UINT msPassed);
 #ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void));
 #endif
 
@@ -98,6 +101,11 @@ Song* currentSong = nullptr;
 Song* preLoadedSong = nullptr;
 
 bool sdRoutineLock = false;
+static rtos_mutex_storage_t sSdRoutineMutexStorage;
+rtos_mutex_t sdRoutineMutex;
+
+static rtos_mutex_storage_t sUsbMutexStorage;
+rtos_mutex_t usbMutex;
 
 bool allowSomeUserActionsEvenWhenInCardRoutine = false;
 
@@ -895,7 +903,7 @@ extern "C" int32_t deluge_main(void) {
 		deluge::hid::display::swapDisplayType();
 	}
 
-	usbLock = 1;
+	rtos_mutex_lock(usbMutex);
 	openUSBHost();
 
 	// If nothing was plugged in to us as host, we'll go peripheral
@@ -908,7 +916,7 @@ extern "C" int32_t deluge_main(void) {
 		openUSBPeripheral();
 	}
 
-	usbLock = 0;
+	rtos_mutex_unlock(usbMutex);
 
 	// Hopefully we can read these files now
 	runtimeFeatureSettings.readSettingsFromFile();
@@ -985,6 +993,13 @@ extern "C" int32_t deluge_main(void) {
 	uiTimerManager.setTimer(TimerName::GRAPHICS_ROUTINE, 50);
 
 	D_PRINTLN("going into main loop");
+	AudioEngine::audioMutexInit();
+	sdRoutineMutex = rtos_mutex_create(&sSdRoutineMutexStorage);
+	usbMutex = rtos_mutex_create(&sUsbMutexStorage);
+	{
+		extern void initSdCardMutex(void);
+		initSdCardMutex();
+	}
 	sdRoutineLock = false; // Allow SD routine to start happening
 
 #ifdef USE_FREERTOS
@@ -1014,21 +1029,31 @@ extern "C" bool yieldingRoutineWithTimeoutForSD(RunCondition until, double timeo
 	if (intc_func_active != 0) {
 		return false;
 	}
-	auto timeNow = getSystemTime();
-	// We lock this to prevent multiple entry. Otherwise we could get SD -> routineForSD() -> AudioEngine::routine() ->
+	// Try-lock to prevent multiple entry. Otherwise we could get SD -> routineForSD() -> AudioEngine::routine() ->
 	// USB -> routineForSD()
-	if (sdRoutineLock) {
-		// busy wait - matches running sdroutine in a loop while checking for condition
+	if (!rtos_mutex_trylock(sdRoutineMutex)) {
+#ifdef USE_FREERTOS
+		auto timeNow = getSystemTime();
+		while (!until()) {
+			if (getSystemTime() > timeNow + timeoutSeconds) {
+				return false;
+			}
+			vTaskDelay(1);
+		}
+#else
+		auto timeNow = getSystemTime();
 		while (!until()) {
 			if (getSystemTime() > timeNow + timeoutSeconds) {
 				return false;
 			}
 		}
+#endif
 		return true;
 	}
 	sdRoutineLock = true;
 	bool ret = yieldWithTimeout(until, timeoutSeconds);
 	sdRoutineLock = false;
+	rtos_mutex_unlock(sdRoutineMutex);
 	return ret;
 }
 
@@ -1037,18 +1062,21 @@ extern "C" void yieldingRoutineForSD(RunCondition until) {
 		return;
 	}
 
-	// We lock this to prevent multiple entry. Otherwise we could get SD -> routineForSD() -> AudioEngine::routine() ->
-	// USB -> routineForSD()
-	if (sdRoutineLock) {
-		// busy wait - matches running sdroutine in a loop while checking for condition
+	// Try-lock to prevent multiple entry.
+	if (!rtos_mutex_trylock(sdRoutineMutex)) {
 		while (!until()) {
+#ifdef USE_FREERTOS
+			vTaskDelay(1);
+#else
 			asm volatile("nop");
+#endif
 		}
 		return;
 	}
 	sdRoutineLock = true;
 	yield(until);
 	sdRoutineLock = false;
+	rtos_mutex_unlock(sdRoutineMutex);
 }
 enum class UIStage { oled, readEnc, readButtons };
 
@@ -1059,9 +1087,8 @@ extern "C" void routineForSD(void) {
 		return;
 	}
 
-	// We lock this to prevent multiple entry. Otherwise we could get SD -> routineForSD() -> AudioEngine::routine()
-	// -> USB -> routineForSD()
-	if (sdRoutineLock) {
+	// Try-lock to prevent multiple entry.
+	if (!rtos_mutex_trylock(sdRoutineMutex)) {
 		return;
 	}
 
@@ -1091,6 +1118,7 @@ extern "C" void routineForSD(void) {
 		break;
 	}
 	sdRoutineLock = false;
+	rtos_mutex_unlock(sdRoutineMutex);
 }
 
 extern "C" void sdCardInserted(void) {

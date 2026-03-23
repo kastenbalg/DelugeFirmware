@@ -27,6 +27,7 @@
 #ifdef USE_FREERTOS
 
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "task.h"
 
 /* --------------------------------------------------------------------------
