@@ -51,7 +51,7 @@
 start:
     LDR pc, =reset_handler                 /* Reset Vector                                  */
     LDR pc, =undefined_handler
-    LDR pc, =svc_handler
+    LDR pc, =FreeRTOS_SWI_Handler
     LDR pc, =prefetch_handler
     LDR pc, =abort_handler
     LDR pc, =reserved_handler

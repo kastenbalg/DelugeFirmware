@@ -90,6 +90,9 @@ namespace encoders = deluge::hid::encoders;
 extern uint8_t currentlyAccessingCard;
 
 extern "C" void disk_timerproc(UINT msPassed);
+#ifdef USE_FREERTOS
+extern "C" void startFreeRTOS(void (*schedulerEntry)(void));
+#endif
 
 Song* currentSong = nullptr;
 Song* preLoadedSong = nullptr;
@@ -979,7 +982,15 @@ extern "C" int32_t deluge_main(void) {
 	D_PRINTLN("going into main loop");
 	sdRoutineLock = false; // Allow SD routine to start happening
 
-#ifdef USE_TASK_MANAGER
+#ifdef USE_FREERTOS
+	{
+		static auto schedulerEntry = [] {
+			registerTasks();
+			startTaskManager();
+		};
+		startFreeRTOS(+schedulerEntry);
+	}
+#elif defined(USE_TASK_MANAGER)
 	registerTasks();
 	startTaskManager();
 #else
