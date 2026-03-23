@@ -16,12 +16,12 @@
  */
 
 /*
- * FreeRTOS application wrapper for Phase 1 migration.
+ * FreeRTOS application integration for the Deluge firmware.
  *
- * Creates a single FreeRTOS task that runs the existing cooperative scheduler
- * loop verbatim. All task timing, yield(), resource locks, and scheduling
- * decisions are unchanged. FreeRTOS provides only the kernel infrastructure
- * (tick timer, idle task) as foundation for Phase 2 multi-task migration.
+ * Phase 2+3 architecture:
+ * - Audio task at FreeRTOS priority 7 (highest) — preempts everything
+ * - App task at FreeRTOS priority 3 — runs cooperative scheduler for non-audio tasks
+ * - IRQ handler bridges to existing GIC dispatch via vApplicationFPUSafeIRQHandler
  */
 
 #ifdef USE_FREERTOS
@@ -29,16 +29,38 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* Static allocation for the main scheduler task.
- * 8192 words = 32KB, matching the existing PROGRAM_STACK_SIZE. */
-static StaticTask_t sMainTaskTCB;
-static StackType_t sMainTaskStack[8192];
+/* --------------------------------------------------------------------------
+ * IRQ bridge: FreeRTOS IRQ handler → existing Deluge GIC dispatch
+ *
+ * FreeRTOS's FreeRTOS_IRQ_Handler (portASM.S) reads ICCIAR, saves context,
+ * calls vApplicationFPUSafeIRQHandler(icciar), writes ICCEOIR, then checks
+ * ulPortYieldRequired for context switch. We bridge to the existing Deluge
+ * interrupt dispatch which handles all registered ISRs.
+ * -------------------------------------------------------------------------- */
+extern "C" {
+void INTC_Handler_Interrupt(uint32_t icciar);
 
-/* Static allocation for the idle task (required when configSUPPORT_STATIC_ALLOCATION=1). */
+void vApplicationFPUSafeIRQHandler(uint32_t ulICCIAR) {
+	INTC_Handler_Interrupt(ulICCIAR);
+}
+}
+
+/* --------------------------------------------------------------------------
+ * Static task allocations
+ * -------------------------------------------------------------------------- */
+
+/* App task: runs cooperative scheduler for all non-audio tasks. 32KB stack. */
+static StaticTask_t sAppTaskTCB;
+static StackType_t sAppTaskStack[8192];
+
+/* Audio task: dedicated high-priority task. 16KB stack. */
+static StaticTask_t sAudioTaskTCB;
+static StackType_t sAudioTaskStack[4096];
+
+/* Idle task (required when configSUPPORT_STATIC_ALLOCATION=1). */
 static StaticTask_t sIdleTaskTCB;
 static StackType_t sIdleTaskStack[configMINIMAL_STACK_SIZE];
 
-/* FreeRTOS requires this callback when static allocation is enabled. */
 extern "C" void vApplicationGetIdleTaskMemory(StaticTask_t** ppxIdleTaskTCBBuffer, StackType_t** ppxIdleTaskStackBuffer,
                                               uint32_t* pulIdleTaskStackSize) {
 	*ppxIdleTaskTCBBuffer = &sIdleTaskTCB;
@@ -46,7 +68,6 @@ extern "C" void vApplicationGetIdleTaskMemory(StaticTask_t** ppxIdleTaskTCBBuffe
 	*pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
 }
 
-/* Stack overflow hook — wired to the existing Deluge fault display. */
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskName) {
 	(void)xTask;
 	(void)pcTaskName;
@@ -54,21 +75,45 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskNa
 	freezeWithError("STAK");
 }
 
-/*
- * The main task function. Called with a function pointer to the scheduler
- * entry point (which calls registerTasks + startTaskManager). This avoids
- * the need for freertos_app.cpp to know about registerTasks() which is
- * file-local in deluge.cpp.
- */
-static void mainTaskFunction(void* pvParameters) {
-	void (*schedulerEntry)(void) = (void (*)(void))pvParameters;
-	schedulerEntry(); /* This is an infinite loop — never returns */
+/* --------------------------------------------------------------------------
+ * Audio task: highest priority, runs AudioEngine::routine() in a loop
+ * -------------------------------------------------------------------------- */
+namespace AudioEngine {
+void routine();
 }
 
+static void audioTaskFunction(void* pvParameters) {
+	(void)pvParameters;
+	TickType_t xLastWakeTime = xTaskGetTickCount();
+	for (;;) {
+		AudioEngine::routine();
+		/* Wake every ~1ms. Audio polls DMA buffer position inside routine()
+		 * to determine how many samples to render. With 1kHz tick this wakes
+		 * roughly every 1.45ms worth of audio (64 samples @ 44.1kHz). */
+		vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1));
+	}
+}
+
+/* --------------------------------------------------------------------------
+ * App task: runs existing cooperative scheduler for non-audio tasks
+ * -------------------------------------------------------------------------- */
+static void appTaskFunction(void* pvParameters) {
+	void (*schedulerEntry)(void) = (void (*)(void))pvParameters;
+	schedulerEntry(); /* Infinite loop — never returns */
+}
+
+/* --------------------------------------------------------------------------
+ * Entry point: create tasks and start the FreeRTOS scheduler
+ * -------------------------------------------------------------------------- */
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
-	xTaskCreateStatic(mainTaskFunction, "MainScheduler", 8192,         /* Stack size in words (32KB) */
-	                  (void*)schedulerEntry, configMAX_PRIORITIES - 1, /* Highest application priority */
-	                  sMainTaskStack, &sMainTaskTCB);
+	/* App task at priority 3 — all non-audio tasks run cooperatively here */
+	xTaskCreateStatic(appTaskFunction, "App", 8192, (void*)schedulerEntry,
+	                  3, /* Same priority for all non-audio, no time-slicing */
+	                  sAppTaskStack, &sAppTaskTCB);
+
+	/* Audio task at highest priority — preempts everything */
+	xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */
+	                  sAudioTaskStack, &sAudioTaskTCB);
 
 	/* Start the FreeRTOS scheduler. This never returns. */
 	vTaskStartScheduler();

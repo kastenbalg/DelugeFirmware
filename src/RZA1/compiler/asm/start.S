@@ -55,7 +55,7 @@ start:
     LDR pc, =prefetch_handler
     LDR pc, =abort_handler
     LDR pc, =reserved_handler
-    LDR pc, =irq_handler
+    LDR pc, =FreeRTOS_IRQ_Handler
     LDR pc, =fiq_handler
 code_start:
     .word    start                         /* pointer to the user application start address */

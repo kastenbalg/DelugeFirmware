@@ -612,8 +612,13 @@ void registerTasks() {
 
 	// 0-9: High priority (10 for dyn tasks)
 	uint8_t p = 0;
+#ifndef USE_FREERTOS
+	// Under FreeRTOS, audio runs in its own high-priority task (see freertos_app.cpp)
 	AudioEngine::routine_task_id = addRepeatingTask(&(AudioEngine::routine_task), p++, 8 / 44100., 64 / 44100.,
 	                                                128 / 44100., "audio  routine", RESOURCE_NONE);
+#else
+	p++; // keep priority numbering consistent with non-FreeRTOS path
+#endif
 	addRepeatingTask(MidiEngine::check_incoming_usb, p++, 0.0005, 0.0005, 0.001, "check usb midi", RESOURCE_USB);
 	// this one runs quickly and frequently to check for encoder changes
 	addRepeatingTask([]() { encoders::readEncoders(); }, p++, 0.0002, 0.0004, 0.0005, "read encoders", RESOURCE_NONE);
@@ -1063,7 +1068,10 @@ extern "C" void routineForSD(void) {
 	sdRoutineLock = true;
 	static UIStage step = UIStage::oled;
 	AudioEngine::logAction("from routineForSD()");
+#ifndef USE_FREERTOS
+	// Under FreeRTOS, audio runs in its own preemptive task — don't call it from here
 	AudioEngine::runRoutine();
+#endif
 	switch (step) {
 	case UIStage::oled:
 		if (display->haveOLED()) {

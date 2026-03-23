@@ -381,6 +381,11 @@ void routineWithClusterLoading(bool mayProcessUserActionsBetween) {
 }
 
 void runRoutine() {
+#ifdef USE_FREERTOS
+	// Under FreeRTOS, audio runs in its own preemptive task.
+	// Do NOT call routine() from the app context.
+	return;
+#else
 	// check if we've setup the audio routine task
 	if (routine_task_id != -1) [[likely]] {
 		// run AudioEngine::routine() task so that scheduler is aware
@@ -391,6 +396,7 @@ void runRoutine() {
 		ignoreForStats();
 		routine();
 	}
+#endif
 }
 
 #define TICK_TYPE_SWUNG 1

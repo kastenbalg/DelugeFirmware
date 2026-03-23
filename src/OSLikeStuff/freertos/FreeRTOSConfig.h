@@ -23,9 +23,9 @@
  *
  * FreeRTOS configuration for Synthstrom Deluge (RZ/A1H, Cortex-A9 @ 400MHz).
  *
- * Phase 1: Single FreeRTOS task wrapping the existing cooperative scheduler.
- * The FreeRTOS kernel provides tick timer, idle task, and infrastructure
- * for future multi-task migration (Phase 2).
+ * Phase 2+3: Audio task at highest priority in its own FreeRTOS task.
+ * All non-audio tasks run cooperatively in a single app task.
+ * Resource locks use FreeRTOS mutexes.
  *----------------------------------------------------------*/
 
 /* Cortex-A9 @ 400 MHz */
@@ -48,9 +48,9 @@
 #define configMINIMAL_STACK_SIZE ((uint32_t)256)
 #define configTOTAL_HEAP_SIZE 0
 
-/* Features - disabled in Phase 1, will be enabled incrementally */
-#define configUSE_MUTEXES 0
-#define configUSE_RECURSIVE_MUTEXES 0
+/* Features */
+#define configUSE_MUTEXES 1
+#define configUSE_RECURSIVE_MUTEXES 1
 #define configUSE_COUNTING_SEMAPHORES 0
 #define configUSE_QUEUE_SETS 0
 #define configUSE_TASK_NOTIFICATIONS 1
@@ -98,11 +98,15 @@ extern void freezeWithError(const char* errmsg);
 /* Cortex-A port specific */
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 
+/* All tasks get FPU/NEON context automatically — audio rendering uses
+ * hardware floating-point and NEON SIMD extensively. */
+#define configUSE_TASK_FPU_SUPPORT 2
+
 /* Include standard API functions */
 #define INCLUDE_vTaskDelay 1
 #define INCLUDE_vTaskDelayUntil 1
 #define INCLUDE_vTaskDelete 0
-#define INCLUDE_vTaskSuspend 0
+#define INCLUDE_vTaskSuspend 1
 #define INCLUDE_vTaskPrioritySet 0
 #define INCLUDE_uxTaskPriorityGet 0
 #define INCLUDE_xTaskGetCurrentTaskHandle 1
