@@ -111,5 +111,6 @@ extern void freezeWithError(const char* errmsg);
 #define INCLUDE_uxTaskPriorityGet 0
 #define INCLUDE_xTaskGetCurrentTaskHandle 1
 #define INCLUDE_uxTaskGetStackHighWaterMark 1
+#define INCLUDE_xTaskGetSchedulerState 1
 
 #endif /* FREERTOS_CONFIG_H */

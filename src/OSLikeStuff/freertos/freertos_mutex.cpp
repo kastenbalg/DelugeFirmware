@@ -19,12 +19,20 @@
 
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "task.h"
 
 #include "freertos_mutex.h"
 
 /* Compile-time check that our opaque storage is large enough. */
 static_assert(sizeof(rtos_mutex_storage_t) >= sizeof(StaticSemaphore_t),
               "rtos_mutex_storage_t too small for StaticSemaphore_t");
+
+/* During early boot (before vTaskStartScheduler), all code is single-threaded
+ * so mutex operations are unnecessary. FreeRTOS semaphore APIs assert-fail if
+ * called before the scheduler is running, so we no-op in that case. */
+static inline bool schedulerRunning() {
+	return xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED;
+}
 
 extern "C" {
 
@@ -33,18 +41,30 @@ rtos_mutex_t rtos_mutex_create(rtos_mutex_storage_t* storage) {
 }
 
 void rtos_mutex_lock(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return;
+	}
 	xSemaphoreTake((SemaphoreHandle_t)mutex, portMAX_DELAY);
 }
 
 void rtos_mutex_unlock(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return;
+	}
 	xSemaphoreGive((SemaphoreHandle_t)mutex);
 }
 
 bool rtos_mutex_trylock(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return true; /* Single-threaded — always succeed */
+	}
 	return xSemaphoreTake((SemaphoreHandle_t)mutex, 0) == pdTRUE;
 }
 
 bool rtos_mutex_is_locked(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return false; /* Single-threaded — never contended */
+	}
 	/* Try to take it with zero timeout. If we get it, it wasn't locked —
 	 * give it back immediately. If we don't get it, it's locked. */
 	if (xSemaphoreTake((SemaphoreHandle_t)mutex, 0) == pdTRUE) {

@@ -83,6 +83,12 @@ int32_t closestDistance = 2147483647;
 void GeneralMemoryAllocator::checkStack(char const* caller) {
 #if ALPHA_OR_BETA_VERSION
 
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS the task runs on its own stack, not the linker-defined
+	 * program stack.  FreeRTOS's own stack overflow detection
+	 * (configCHECK_FOR_STACK_OVERFLOW) handles this instead. */
+	(void)caller;
+#else
 	char a;
 
 	int32_t distance = (int32_t)&a - (uint32_t)&program_stack_start;
@@ -96,6 +102,8 @@ void GeneralMemoryAllocator::checkStack(char const* caller) {
 			D_PRINTLN("COLLISION");
 		}
 	}
+#endif
+
 #endif
 }
 

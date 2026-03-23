@@ -97,6 +97,8 @@ extern "C" void disk_timerproc(UINT msPassed);
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void));
 #endif
 
+static void deluge_boot_post_scheduler();
+
 Song* currentSong = nullptr;
 Song* preLoadedSong = nullptr;
 
@@ -833,6 +835,18 @@ extern "C" int32_t deluge_main(void) {
 	ramTestLED();
 #endif
 
+	/* Create all mutexes early — before any code that touches the SD card
+	 * (audioFileManager.init → StorageManager::initSD → diskio → rtos_mutex_lock).
+	 * The mutex handles must exist before use, even though the FreeRTOS scheduler
+	 * won't start until later. */
+	AudioEngine::audioMutexInit();
+	sdRoutineMutex = rtos_mutex_create(&sSdRoutineMutexStorage);
+	usbMutex = rtos_mutex_create(&sUsbMutexStorage);
+	{
+		extern void initSdCardMutex(void);
+		initSdCardMutex();
+	}
+
 	audioFileManager.init();
 
 	// Setup SPIBSC. Crucial that this only be done now once everything else is running, because I've injected graphics
@@ -903,6 +917,29 @@ extern "C" int32_t deluge_main(void) {
 		deluge::hid::display::swapDisplayType();
 	}
 
+#ifdef USE_FREERTOS
+	{
+		static auto schedulerEntry = [] {
+			deluge_boot_post_scheduler();
+			registerTasks();
+			startTaskManager();
+		};
+		startFreeRTOS(+schedulerEntry);
+	}
+#elif defined(USE_TASK_MANAGER)
+	deluge_boot_post_scheduler();
+	registerTasks();
+	startTaskManager();
+#else
+	deluge_boot_post_scheduler();
+	mainLoop();
+#endif
+	return 0;
+}
+
+/* Boot steps that require the FreeRTOS scheduler (and therefore mutexes) to be running.
+ * Called from inside the app task under FreeRTOS, or directly on the bare-metal path. */
+static void deluge_boot_post_scheduler() {
 	rtos_mutex_lock(usbMutex);
 	openUSBHost();
 
@@ -993,30 +1030,7 @@ extern "C" int32_t deluge_main(void) {
 	uiTimerManager.setTimer(TimerName::GRAPHICS_ROUTINE, 50);
 
 	D_PRINTLN("going into main loop");
-	AudioEngine::audioMutexInit();
-	sdRoutineMutex = rtos_mutex_create(&sSdRoutineMutexStorage);
-	usbMutex = rtos_mutex_create(&sUsbMutexStorage);
-	{
-		extern void initSdCardMutex(void);
-		initSdCardMutex();
-	}
 	sdRoutineLock = false; // Allow SD routine to start happening
-
-#ifdef USE_FREERTOS
-	{
-		static auto schedulerEntry = [] {
-			registerTasks();
-			startTaskManager();
-		};
-		startFreeRTOS(+schedulerEntry);
-	}
-#elif defined(USE_TASK_MANAGER)
-	registerTasks();
-	startTaskManager();
-#else
-	mainLoop();
-#endif
-	return 0;
 }
 
 bool inSpamMode = false;
