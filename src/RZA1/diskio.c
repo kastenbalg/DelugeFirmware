@@ -218,42 +218,47 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
 
     // uint16_t startTime = MTU2.TCNT_0;
 
-    rtos_mutex_lock(sdCardMutex);
-    currentlyAccessingCard = 1;
-
 #ifdef USE_FREERTOS
-    /* Temporarily raise calling task to maximum priority to prevent
-     * preemption during the entire SDHI transaction. This avoids the
-     * nesting issues with vTaskSuspendAll inside sddev_loc_cpu. */
-    TaskHandle_t thisTask     = NULL;
-    UBaseType_t savedPriority = 0;
+    /* Read one sector at a time with priority boost, releasing between
+     * each sector so the audio task can run. Each sd_read_sect of 1 sector
+     * takes ~150-250us, well within the audio DMA buffer margin.
+     * The sdCardMutex is held for the entire sequence to prevent other
+     * tasks from interleaving their own SD operations. */
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
     {
-        thisTask      = xTaskGetCurrentTaskHandle();
-        savedPriority = uxTaskPriorityGet(thisTask);
-        vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
+        TaskHandle_t thisTask     = xTaskGetCurrentTaskHandle();
+        UBaseType_t savedPriority = uxTaskPriorityGet(thisTask);
+
+        rtos_mutex_lock(sdCardMutex);
+        currentlyAccessingCard = 1;
+        err                    = 0;
+
+        for (UINT i = 0; i < count; i++)
+        {
+            vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
+            err = sd_read_sect(SD_PORT, buff + (i * 512), sector + i, 1);
+            vTaskPrioritySet(thisTask, savedPriority);
+
+            if (err != 0)
+            {
+                break;
+            }
+        }
+
+        currentlyAccessingCard = 0;
+        rtos_mutex_unlock(sdCardMutex);
     }
+    else
 #endif
-
-    err = sd_read_sect(SD_PORT, buff, sector, count);
-
-#ifdef USE_FREERTOS
-    if (thisTask != NULL)
     {
-        vTaskPrioritySet(thisTask, savedPriority);
+        rtos_mutex_lock(sdCardMutex);
+        currentlyAccessingCard = 1;
+
+        err = sd_read_sect(SD_PORT, buff, sector, count);
+
+        currentlyAccessingCard = 0;
+        rtos_mutex_unlock(sdCardMutex);
     }
-#endif
-
-    currentlyAccessingCard = 0;
-    rtos_mutex_unlock(sdCardMutex);
-
-    /*
-    uint16_t endTime = MTU2.TCNT_0;
-    uint16_t duration = endTime - startTime;
-    uartPrintln(intToStringUSB(duration));
-    */
-
-    // My good 16gb card gave about 150 per read. Bad card gave ~250, and occasionally up to 30,000!
 
     if (err == 0)
     {
@@ -286,31 +291,42 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
         }
     }
 
-    rtos_mutex_lock(sdCardMutex);
-    currentlyAccessingCard = 1;
-
 #ifdef USE_FREERTOS
-    TaskHandle_t thisTaskW     = NULL;
-    UBaseType_t savedPriorityW = 0;
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
     {
-        thisTaskW      = xTaskGetCurrentTaskHandle();
-        savedPriorityW = uxTaskPriorityGet(thisTaskW);
-        vTaskPrioritySet(thisTaskW, configMAX_PRIORITIES - 1);
+        TaskHandle_t thisTask     = xTaskGetCurrentTaskHandle();
+        UBaseType_t savedPriority = uxTaskPriorityGet(thisTask);
+
+        rtos_mutex_lock(sdCardMutex);
+        currentlyAccessingCard = 1;
+        err                    = 0;
+
+        for (UINT i = 0; i < count; i++)
+        {
+            vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
+            err = sd_write_sect(SD_PORT, buff + (i * 512), sector + i, 1, 0x0001u);
+            vTaskPrioritySet(thisTask, savedPriority);
+
+            if (err != 0)
+            {
+                break;
+            }
+        }
+
+        currentlyAccessingCard = 0;
+        rtos_mutex_unlock(sdCardMutex);
     }
+    else
 #endif
-
-    err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
-
-#ifdef USE_FREERTOS
-    if (thisTaskW != NULL)
     {
-        vTaskPrioritySet(thisTaskW, savedPriorityW);
-    }
-#endif
+        rtos_mutex_lock(sdCardMutex);
+        currentlyAccessingCard = 1;
 
-    currentlyAccessingCard = 0;
-    rtos_mutex_unlock(sdCardMutex);
+        err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
+
+        currentlyAccessingCard = 0;
+        rtos_mutex_unlock(sdCardMutex);
+    }
 
     if (err == 0)
     {
