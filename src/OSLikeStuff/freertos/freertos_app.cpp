@@ -18,9 +18,10 @@
 /*
  * FreeRTOS application integration for the Deluge firmware.
  *
- * Phase 2+3 architecture:
- * - Audio task at FreeRTOS priority 7 (highest) — preempts everything
- * - App task at FreeRTOS priority 3 — runs cooperative scheduler for non-audio tasks
+ * Phase 4 architecture:
+ * - Audio task at FreeRTOS priority 7 (highest) — DSP only, never touches SD
+ * - Cluster loader task at priority 5 — loads sample clusters from SD card
+ * - App task at FreeRTOS priority 3 — runs cooperative scheduler for UI/file ops
  * - IRQ handler bridges to existing GIC dispatch via vApplicationFPUSafeIRQHandler
  */
 
@@ -57,6 +58,13 @@ static StackType_t sAppTaskStack[8192];
 /* Audio task: dedicated high-priority task. 16KB stack. */
 static StaticTask_t sAudioTaskTCB;
 static StackType_t sAudioTaskStack[4096];
+
+/* Cluster loader task: loads sample clusters from SD card. 8KB stack. */
+static StaticTask_t sClusterLoaderTCB;
+static StackType_t sClusterLoaderStack[2048];
+
+/* Global handle for task notification from ClusterPriorityQueue::enqueueCluster() */
+TaskHandle_t clusterLoaderTaskHandle = nullptr;
 
 /* Idle task (required when configSUPPORT_STATIC_ALLOCATION=1). */
 static StaticTask_t sIdleTaskTCB;
@@ -96,6 +104,16 @@ static void audioTaskFunction(void* pvParameters) {
 }
 
 /* --------------------------------------------------------------------------
+ * Cluster loader task: dedicated task for loading sample clusters from SD
+ * -------------------------------------------------------------------------- */
+#include "storage/audio/audio_file_manager.h"
+
+static void clusterLoaderTaskFunction(void* pvParameters) {
+	(void)pvParameters;
+	audioFileManager.clusterLoaderMain(); /* Infinite loop — never returns */
+}
+
+/* --------------------------------------------------------------------------
  * App task: runs existing cooperative scheduler for non-audio tasks
  * -------------------------------------------------------------------------- */
 static void appTaskFunction(void* pvParameters) {
@@ -111,6 +129,10 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	xTaskCreateStatic(appTaskFunction, "App", 8192, (void*)schedulerEntry,
 	                  3, /* Same priority for all non-audio, no time-slicing */
 	                  sAppTaskStack, &sAppTaskTCB);
+
+	/* Cluster loader task at priority 5 — above app, below audio */
+	clusterLoaderTaskHandle = xTaskCreateStatic(clusterLoaderTaskFunction, "ClusterLoader", 2048, NULL, 5,
+	                                            sClusterLoaderStack, &sClusterLoaderTCB);
 
 	/* Audio task at highest priority — preempts everything */
 	xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */

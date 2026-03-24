@@ -113,7 +113,11 @@
 */
 
 
-#define FF_USE_LFN		1 // Set by Rohan
+#ifdef USE_FREERTOS
+#define FF_USE_LFN		2 /* Dynamic LFN on stack (required for FF_FS_REENTRANT) */
+#else
+#define FF_USE_LFN		1 /* Static LFN on BSS */
+#endif
 #define FF_MAX_LFN		255
 /* The FF_USE_LFN switches the support for LFN (long file name).
 /
@@ -275,10 +279,15 @@
 /      lock control is independent of re-entrancy. */
 
 
-/* #include <somertos.h>	// O/S definitions */
+#ifdef USE_FREERTOS
+#define FF_FS_REENTRANT	1
+#define FF_FS_TIMEOUT	0xFFFFFFFF /* portMAX_DELAY — wait indefinitely for SD access */
+#define FF_SYNC_t		void* /* SemaphoreHandle_t is void* — avoid pulling FreeRTOS.h here */
+#else
 #define FF_FS_REENTRANT	0
 #define FF_FS_TIMEOUT	1000
-#define FF_SYNC_t		HANDLE
+#define FF_SYNC_t		void*
+#endif
 /* The option FF_FS_REENTRANT switches the re-entrancy (thread safe) of the FatFs
 /  module itself. Note that regardless of this option, file access to different
 /  volume is always re-entrant and volume control functions, f_mount(), f_mkfs()

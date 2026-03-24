@@ -86,8 +86,6 @@ DRESULT disk_read(BYTE pdrv, /* Physical drive nmuber (0) */
 {
     logAudioAction("disk_read");
 
-    loadAnyEnqueuedClustersRoutine(); // Always ensure SD streaming is fulfilled before anything else
-
     DRESULT result = disk_read_without_streaming_first(pdrv, buff, sector, count);
 
     if (currentlySearchingForCluster)
@@ -252,8 +250,6 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
     UINT count                /* Number of sectors to write */
 )
 {
-
-    loadAnyEnqueuedClustersRoutine(); // Always ensure SD streaming is fulfilled before anything else
 
     BYTE err;
 

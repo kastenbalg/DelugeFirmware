@@ -55,6 +55,11 @@ Includes   <System Includes> , "Project Includes"
 #include "OSLikeStuff/timers_interrupts/timers_interrupts.h"
 #include "OSLikeStuff/scheduler_api.h"
 
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
+
 /******************************************************************************
 Typedef definitions
 ******************************************************************************/
@@ -1223,9 +1228,13 @@ static int sddev_disable_dma_1(void)
 ******************************************************************************/
 int sddev_loc_cpu(int sd_port)
 {
-#if 0
-    R_INTC_GetMaskLevel(&g_sdhi_priority_backup);
-    R_INTC_SetMaskLevel(0);
+#ifdef USE_FREERTOS
+    /* Under FreeRTOS, the audio task can preempt mid-SDHI operation.
+     * Suspend the scheduler to prevent context switches during the
+     * driver's internal critical sections. We don't disable interrupts
+     * because the SDHI DMA completion interrupt (priority 10) must
+     * still fire. */
+    vTaskSuspendAll();
 #endif
 
     return SD_OK;
@@ -1240,8 +1249,8 @@ int sddev_loc_cpu(int sd_port)
 ******************************************************************************/
 int sddev_unl_cpu(int sd_port)
 {
-#if 0
-    R_INTC_SetMaskLevel(g_sdhi_priority_backup);
+#ifdef USE_FREERTOS
+    xTaskResumeAll();
 #endif
     return SD_OK;
 }

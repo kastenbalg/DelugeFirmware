@@ -23,6 +23,12 @@
 #include <limits>
 #include <ranges>
 
+/* Thread-safety helpers — implemented in cluster_priority_queue.cpp to avoid
+ * pulling FreeRTOS headers into this widely-included header. */
+void clusterQueueEnterCritical();
+void clusterQueueExitCritical();
+void clusterQueueNotifyLoader();
+
 using Priority = uint32_t;
 using qcluster = std::pair<Priority, Cluster*>;
 
@@ -35,24 +41,30 @@ class ClusterPriorityQueue : public std::priority_queue<qcluster, deluge::fast_v
 
 public:
 	Error enqueueCluster(Cluster& cluster, uint32_t priorityRating) {
+		clusterQueueEnterCritical();
 		this->push(std::pair(priorityRating, &cluster));
+		clusterQueueExitCritical();
+		clusterQueueNotifyLoader();
 		return Error::NONE;
 	}
 	[[nodiscard]] constexpr Cluster* front() const { return this->top().second; }
 	[[nodiscard]] Cluster* getNext() {
 		Cluster* cluster = nullptr;
+		clusterQueueEnterCritical();
 		while (!this->empty()) {
 			cluster = this->front();
 			this->pop();
 			if (cluster != nullptr) {
 				// if this cluster is still wanted then we'll return it
 				if ((!cluster->unloadable) && cluster->numReasonsToBeLoaded > 0) {
+					clusterQueueExitCritical();
 					return cluster;
 				}
 				// otherwise get rid of it and continue to the next one
 				cluster->destroy();
 			}
 		}
+		clusterQueueExitCritical();
 		return nullptr;
 	}
 
@@ -63,12 +75,15 @@ public:
 	}
 
 	bool erase(const Cluster* cluster) {
+		clusterQueueEnterCritical();
 		for (auto& val : this->c | std::views::values) {
 			if (val == cluster) {
 				val = nullptr;
+				clusterQueueExitCritical();
 				return true;
 			}
 		}
+		clusterQueueExitCritical();
 		return false;
 	};
 };

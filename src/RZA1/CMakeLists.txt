@@ -3,6 +3,7 @@ file(GLOB_RECURSE RZA1_SOURCES CONFIGURE_DEPENDS *.S *.c *.h)
 add_library(RZA1 STATIC ${RZA1_SOURCES})
 target_include_directories(RZA1 PRIVATE ${SHARED_INCLUDE})
 target_link_libraries(RZA1 PRIVATE fatfs)
+target_link_libraries(RZA1 PRIVATE freertos_kernel)
 
 target_compile_definitions(RZA1 PRIVATE
     $<$<CONFIG:DEBUG>:ENABLE_TEXT_OUTPUT=1>

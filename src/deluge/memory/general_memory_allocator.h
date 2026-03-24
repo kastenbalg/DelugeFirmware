@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "OSLikeStuff/freertos/freertos_mutex.h"
 #include "definitions_cxx.hpp"
 #include "memory/memory_region.h"
 
@@ -99,7 +100,16 @@ public:
 	MemoryRegion regions[NUM_MEMORY_REGIONS];
 	// only used for managing stealables (audio files that we could deallocate and re load from sd later if needed)
 	CacheManager cacheManager;
-	bool lock;
+	bool lock; /* re-entrancy guard for freeSomeStealableMemory() — kept alongside mutex */
+#ifdef USE_FREERTOS
+	rtos_mutex_storage_t allocMutexStorage;
+	rtos_mutex_t allocMutex;
+	void lockMutex();
+	void unlockMutex();
+#else
+	inline void lockMutex() {}
+	inline void unlockMutex() {}
+#endif
 
 	static GeneralMemoryAllocator& get() {
 		static GeneralMemoryAllocator generalMemoryAllocator;

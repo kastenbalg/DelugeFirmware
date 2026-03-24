@@ -1142,10 +1142,6 @@ extern "C" void sdCardEjected(void) {
 	audioFileManager.setCardEjected();
 }
 
-extern "C" void loadAnyEnqueuedClustersRoutine() {
-	audioFileManager.loadAnyEnqueuedClusters();
-}
-
 extern "C" void setNumeric(char* text) {
 	display->setText(text);
 }

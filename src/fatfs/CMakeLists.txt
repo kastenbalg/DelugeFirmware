@@ -7,6 +7,7 @@ add_library(fatfs STATIC
     fatfs.cpp
 )
 target_include_directories(fatfs PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(fatfs PRIVATE freertos_kernel)
 set_target_properties(fatfs
     PROPERTIES
         C_STANDARD ${DELUGE_C_STANDARD}

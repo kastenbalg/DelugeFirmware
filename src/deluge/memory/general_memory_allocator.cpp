@@ -39,7 +39,16 @@ extern uint32_t __heap_end;
 extern uint32_t program_stack_start;
 extern uint32_t program_stack_end;
 // NOLINTEND
-GeneralMemoryAllocator::GeneralMemoryAllocator() : lock(false) {
+GeneralMemoryAllocator::GeneralMemoryAllocator()
+    : lock(false)
+#ifdef USE_FREERTOS
+      ,
+      allocMutex(nullptr)
+#endif
+{
+#ifdef USE_FREERTOS
+	allocMutex = rtos_mutex_create(&allocMutexStorage);
+#endif
 	uint32_t external_small_end = EXTERNAL_MEMORY_END;
 	uint32_t external_small_start = external_small_end - RESERVED_EXTERNAL_SMALL_ALLOCATOR;
 	uint32_t external_end = external_small_start;
@@ -76,6 +85,16 @@ GeneralMemoryAllocator::GeneralMemoryAllocator() : lock(false) {
 	regions[MEMORY_REGION_INTERNAL_SMALL].minAlign_ = 16;
 	regions[MEMORY_REGION_INTERNAL_SMALL].pivot_ = 64;
 }
+
+#ifdef USE_FREERTOS
+void GeneralMemoryAllocator::lockMutex() {
+	rtos_mutex_lock(allocMutex);
+}
+void GeneralMemoryAllocator::unlockMutex() {
+	rtos_mutex_unlock(allocMutex);
+}
+#endif
+
 constexpr size_t kInternalSwitchSize = 128;
 constexpr size_t kExternalSwitchSize = 128;
 int32_t closestDistance = 2147483647;
@@ -121,54 +140,58 @@ extern "C" void delugeDealloc(void* address) {
 	GeneralMemoryAllocator::get().dealloc(address);
 #endif
 }
-void* GeneralMemoryAllocator::allocExternal(uint32_t requiredSize) {
-
-	if (lock) {
-		return nullptr; // Prevent any weird loops in freeSomeStealableMemory(), which mostly would only be bad cos they
-		                // could extend the stack an unspecified amount
-	}
-
-	lock = true;
+/* Unlocked helpers — caller must hold allocMutex and set lock=true */
+static void* allocExternalUnlocked(MemoryRegion* regions, uint32_t requiredSize) {
 	void* address = nullptr;
 	if (requiredSize < kExternalSwitchSize) {
 		address = regions[MEMORY_REGION_EXTERNAL_SMALL].alloc(requiredSize, false, NULL);
 	}
-	// if it's a large object or the small object allocator was full stick it in the big one
 	if (address == nullptr) {
 		address = regions[MEMORY_REGION_EXTERNAL].alloc(requiredSize, false, NULL);
-	}
-	lock = false;
-	if (!address) {
-		// FREEZE_WITH_ERROR("M998");
-		return nullptr;
 	}
 	return address;
 }
 
-void* GeneralMemoryAllocator::allocInternal(uint32_t requiredSize) {
-
-	if (lock) {
-		return nullptr; // Prevent any weird loops in freeSomeStealableMemory(), which mostly would only be bad cos they
-		                // could extend the stack an unspecified amount
-	}
-
-	lock = true;
+static void* allocInternalUnlocked(MemoryRegion* regions, uint32_t requiredSize) {
 	void* address = nullptr;
 	if (requiredSize < kInternalSwitchSize) {
 		address = regions[MEMORY_REGION_INTERNAL_SMALL].alloc(requiredSize, false, NULL);
 	}
-	// if it's a large object or the small object allocator was full stick it in the big one
 	if (address == nullptr) {
 		address = regions[MEMORY_REGION_INTERNAL].alloc(requiredSize, false, NULL);
 	}
-	lock = false;
-	if (address == nullptr) {
-		// FREEZE_WITH_ERROR("M998");
-	}
 	return address;
 }
+
+/* Public locked entry points */
+void* GeneralMemoryAllocator::allocExternal(uint32_t requiredSize) {
+	if (lock) {
+		return nullptr;
+	}
+	lockMutex();
+	lock = true;
+	void* address = allocExternalUnlocked(regions, requiredSize);
+	lock = false;
+	unlockMutex();
+	return address;
+}
+
+void* GeneralMemoryAllocator::allocInternal(uint32_t requiredSize) {
+	if (lock) {
+		return nullptr;
+	}
+	lockMutex();
+	lock = true;
+	void* address = allocInternalUnlocked(regions, requiredSize);
+	lock = false;
+	unlockMutex();
+	return address;
+}
+
 void GeneralMemoryAllocator::deallocExternal(void* address) {
+	lockMutex();
 	regions[getRegion(address)].dealloc(address);
+	unlockMutex();
 }
 
 // Watch the heck out - in the older V3.1 branch, this had one less argument - makeStealable was missing - so in code
@@ -182,15 +205,20 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 		                // could extend the stack an unspecified amount
 	}
 
+	lockMutex();
+	lock = true;
+
 	void* address = nullptr;
 
 	// Only allow allocating stealables in stelable region
 	if (!makeStealable) {
 		// If internal is allowed, try that first
 		if (mayUseOnChipRam) {
-			address = allocInternal(requiredSize);
+			address = allocInternalUnlocked(regions, requiredSize);
 
 			if (address != nullptr) {
+				lock = false;
+				unlockMutex();
 				return address;
 			}
 
@@ -198,9 +226,11 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 		}
 
 		// Second try external region
-		address = allocExternal(requiredSize);
+		address = allocExternalUnlocked(regions, requiredSize);
 
 		if (address) {
+			lock = false;
+			unlockMutex();
 			return address;
 		}
 
@@ -216,9 +246,9 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 	}
 #endif
 
-	lock = true;
 	address = regions[MEMORY_REGION_STEALABLE].alloc(requiredSize, makeStealable, thingNotToStealFrom);
 	lock = false;
+	unlockMutex();
 	return address;
 }
 
@@ -253,13 +283,20 @@ int32_t GeneralMemoryAllocator::getRegion(void* address) {
 
 // Returns new size
 uint32_t GeneralMemoryAllocator::shortenRight(void* address, uint32_t newSize) {
-	return regions[getRegion(address)].shortenRight(address, newSize);
+	lockMutex();
+	uint32_t result = regions[getRegion(address)].shortenRight(address, newSize);
+	unlockMutex();
+	return result;
 }
 
 // Returns how much it was shortened by
 uint32_t GeneralMemoryAllocator::shortenLeft(void* address, uint32_t amountToShorten,
                                              uint32_t numBytesToMoveRightIfSuccessful) {
-	return regions[getRegion(address)].shortenLeft(address, amountToShorten, numBytesToMoveRightIfSuccessful);
+	lockMutex();
+	uint32_t result =
+	    regions[getRegion(address)].shortenLeft(address, amountToShorten, numBytesToMoveRightIfSuccessful);
+	unlockMutex();
+	return result;
 }
 
 void GeneralMemoryAllocator::extend(void* address, uint32_t minAmountToExtend, uint32_t idealAmountToExtend,
@@ -273,26 +310,35 @@ void GeneralMemoryAllocator::extend(void* address, uint32_t minAmountToExtend, u
 		return;
 	}
 
+	lockMutex();
 	lock = true;
 	regions[getRegion(address)].extend(address, minAmountToExtend, idealAmountToExtend, getAmountExtendedLeft,
 	                                   getAmountExtendedRight, thingNotToStealFrom);
 	lock = false;
+	unlockMutex();
 }
 
 uint32_t GeneralMemoryAllocator::extendRightAsMuchAsEasilyPossible(void* address) {
-	return regions[getRegion(address)].extendRightAsMuchAsEasilyPossible(address);
+	lockMutex();
+	uint32_t result = regions[getRegion(address)].extendRightAsMuchAsEasilyPossible(address);
+	unlockMutex();
+	return result;
 }
 
 void GeneralMemoryAllocator::dealloc(void* address) {
 	if (address == nullptr) [[unlikely]] {
 		return;
 	}
+	lockMutex();
 	regions[getRegion(address)].dealloc(address);
+	unlockMutex();
 }
 
 void GeneralMemoryAllocator::putStealableInQueue(Stealable* stealable, StealableQueue q) {
+	lockMutex();
 	MemoryRegion& region = regions[getRegion(stealable)];
 	region.cache_manager().QueueForReclamation(q, stealable);
+	unlockMutex();
 }
 
 void GeneralMemoryAllocator::putStealableInAppropriateQueue(Stealable* stealable) {

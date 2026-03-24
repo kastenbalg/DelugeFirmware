@@ -36,6 +36,11 @@
 #include "storage/wave_table/wave_table_reader.h"
 #include "util/try.h"
 
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
+
 #include <new>
 #include <string.h>
 
@@ -55,6 +60,11 @@ LBA_t clst2sect(           /* !=0:Sector number, 0:Failed (invalid cluster#) */
 DRESULT disk_read_without_streaming_first(BYTE pdrv, BYTE* buff, DWORD sector, UINT count);
 
 extern uint8_t currentlyAccessingCard;
+
+#ifdef USE_FREERTOS
+void fatfs_lock_volume(void);
+void fatfs_unlock_volume(void);
+#endif
 }
 
 AudioFileManager audioFileManager{};
@@ -905,19 +915,24 @@ audioFileError:
 
 bool AudioFileManager::loadCluster(Cluster& cluster, int32_t minNumReasonsAfter) {
 
-	if (currentlyAccessingCard) {
-		return false; // Could happen if we're trying to render a waveform but we're actually already inside the SD
-		              // routine
-	}
-
-	// I don't think these should happen...
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, the dedicated cluster loader task calls this.
+	 * SD card serialization is handled by sdCardMutex in diskio.c.
+	 * Only keep the clusterBeingLoaded re-entrancy check. */
 	if (clusterBeingLoaded != nullptr) {
 		return false;
 	}
-
+#else
+	if (currentlyAccessingCard) {
+		return false;
+	}
+	if (clusterBeingLoaded != nullptr) {
+		return false;
+	}
 	if (AudioEngine::audioMutexIsLocked()) {
 		return false;
 	}
+#endif
 
 	clusterBeingLoaded = &cluster;
 	minNumReasonsForClusterBeingLoaded = minNumReasonsAfter + 1;
@@ -991,6 +1006,9 @@ getOutEarly:
 	}
 #endif
 
+	/* Two-level locking: the loader only needs sdCardMutex (taken inside
+	 * disk_read_without_streaming_first), not the FatFS volume mutex.
+	 * This lets it interleave with FatFS operations at the sector level. */
 	DRESULT result = disk_read_without_streaming_first(
 	    SD_PORT, (BYTE*)cluster.data, sample->clusters.getElement(cluster.clusterIndex)->sdAddress, numSectors);
 
@@ -1255,6 +1273,13 @@ uint16_t timeLastFinish;
 
 void AudioFileManager::loadAnyEnqueuedClusters(int32_t maxNum, bool mayProcessUserActionsBetween) {
 
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, the dedicated cluster loader task handles all cluster loading.
+	 * Just wake it up if there's work to do. */
+	clusterQueueNotifyLoader();
+	return;
+#endif
+
 	if (currentlyAccessingCard) {
 		return;
 	}
@@ -1420,3 +1445,52 @@ void AudioFileManager::thingFinishedLoading() {
 	alternateLoadDirStatus = AlternateLoadDirStatus::NONE_SET;
 	thingTypeBeingLoaded = ThingType::NONE;
 }
+
+#ifdef USE_FREERTOS
+/*
+ * Entry point for the dedicated cluster loader FreeRTOS task.
+ * Blocks on task notifications, then drains the loading queue one cluster
+ * at a time. Runs at priority 5 — above the app task (3) but below audio (7).
+ */
+void AudioFileManager::clusterLoaderMain() {
+	for (;;) {
+		/* Block until a cluster is enqueued (or spurious wake) */
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+		/* Drain the queue one cluster at a time */
+		while (true) {
+			if (cardEjected || cardDisabled) {
+				break;
+			}
+			if (!StorageManager::checkSDInitialized()) {
+				break;
+			}
+
+			Cluster* cluster = loadingQueue.getNext();
+			if (cluster == nullptr) {
+				break;
+			}
+
+			if (cluster->type != Cluster::Type::SAMPLE) {
+				FREEZE_WITH_ERROR("E235");
+			}
+
+			bool success = loadCluster(*cluster);
+
+			if (!success) {
+				D_PRINTLN("loader: cluster load fail");
+				if (cluster->numReasonsToBeLoaded) {
+					if (cluster->type != Cluster::Type::SAMPLE) {
+						FREEZE_WITH_ERROR("E237");
+					}
+					loadingQueue.enqueueCluster(*cluster, 0xFFFFFFFF);
+					break; /* Avoid infinite retry loop */
+				}
+			}
+			/* No vTaskDelay needed — sdCardMutex contention with the app task
+			 * provides natural interleaving via priority inheritance. The loader
+			 * only blocks when the app task actually needs the card. */
+		}
+	}
+}
+#endif
