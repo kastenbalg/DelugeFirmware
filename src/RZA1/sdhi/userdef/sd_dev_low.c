@@ -1229,12 +1229,13 @@ static int sddev_disable_dma_1(void)
 int sddev_loc_cpu(int sd_port)
 {
 #ifdef USE_FREERTOS
-    /* Under FreeRTOS, the audio task can preempt mid-SDHI operation.
-     * Suspend the scheduler to prevent context switches during the
-     * driver's internal critical sections. We don't disable interrupts
-     * because the SDHI DMA completion interrupt (priority 10) must
-     * still fire. */
-    vTaskSuspendAll();
+    /* Prevent FreeRTOS context switches during SDHI driver critical sections.
+     * The SDHI DMA completion interrupt (priority 10) is above
+     * configMAX_API_CALL_INTERRUPT_PRIORITY so it still fires.
+     * Guard: only suspend if the scheduler is running (not during boot). */
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        vTaskSuspendAll();
+    }
 #endif
 
     return SD_OK;
@@ -1250,7 +1251,9 @@ int sddev_loc_cpu(int sd_port)
 int sddev_unl_cpu(int sd_port)
 {
 #ifdef USE_FREERTOS
-    xTaskResumeAll();
+    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+        xTaskResumeAll();
+    }
 #endif
     return SD_OK;
 }

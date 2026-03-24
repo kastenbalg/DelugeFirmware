@@ -33,6 +33,10 @@
 #include "definitions.h"
 
 #include "OSLikeStuff/freertos/freertos_mutex.h"
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
 #include "RZA1/compiler/asm/inc/asm.h"
 #include "RZA1/rspi/rspi.h"
 #include "RZA1/sdhi/inc/sdif.h"
@@ -217,7 +221,28 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
     rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
 
+#ifdef USE_FREERTOS
+    /* Temporarily raise calling task to maximum priority to prevent
+     * preemption during the entire SDHI transaction. This avoids the
+     * nesting issues with vTaskSuspendAll inside sddev_loc_cpu. */
+    TaskHandle_t thisTask     = NULL;
+    UBaseType_t savedPriority = 0;
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+    {
+        thisTask      = xTaskGetCurrentTaskHandle();
+        savedPriority = uxTaskPriorityGet(thisTask);
+        vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
+    }
+#endif
+
     err = sd_read_sect(SD_PORT, buff, sector, count);
+
+#ifdef USE_FREERTOS
+    if (thisTask != NULL)
+    {
+        vTaskPrioritySet(thisTask, savedPriority);
+    }
+#endif
 
     currentlyAccessingCard = 0;
     rtos_mutex_unlock(sdCardMutex);
@@ -264,7 +289,25 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
     rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
 
+#ifdef USE_FREERTOS
+    TaskHandle_t thisTaskW     = NULL;
+    UBaseType_t savedPriorityW = 0;
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+    {
+        thisTaskW      = xTaskGetCurrentTaskHandle();
+        savedPriorityW = uxTaskPriorityGet(thisTaskW);
+        vTaskPrioritySet(thisTaskW, configMAX_PRIORITIES - 1);
+    }
+#endif
+
     err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
+
+#ifdef USE_FREERTOS
+    if (thisTaskW != NULL)
+    {
+        vTaskPrioritySet(thisTaskW, savedPriorityW);
+    }
+#endif
 
     currentlyAccessingCard = 0;
     rtos_mutex_unlock(sdCardMutex);
