@@ -88,7 +88,11 @@ public:
 
 	int32_t overrideAmplitudeEnvelopeReleaseRate;
 
-	bool justCreated{false};
+	/// Number of samples to skip at the start of the first render after noteOn.
+	/// Set from the samplesLate parameter in noteOn(). The voice iteration loop
+	/// in Sound::render() offsets the buffer pointer and reduces numSamples
+	/// accordingly, so no DSP cycles are wasted rendering silence.
+	uint8_t startOffsetSamples{0};
 
 	uint32_t getLocalLFOPhaseIncrement(LFO_ID lfoId, deluge::modulation::params::Local param);
 	void setAsUnassigned(ModelStackWithSoundFlags* modelStack, bool deletingSong = false);

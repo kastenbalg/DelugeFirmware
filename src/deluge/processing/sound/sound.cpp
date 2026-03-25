@@ -2519,9 +2519,25 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 		for (auto it = voices_.begin(); it != voices_.end();) {
 			ActiveVoice& voice = *it;
 
-			bool stillGoing =
-			    voice->render(modelStackWithSoundFlags, sound_mono.data(), sound_mono.size(), voice_rendered_in_stereo,
-			                  applyingPanAtVoiceLevel, sourcesChanged, doLPF, doHPF, pitchAdjust);
+			/* Apply per-voice start offset for sample-accurate note-on timing.
+			 * On the first render after noteOn, skip startOffsetSamples at the
+			 * beginning of the buffer — the voice renders fewer samples into a
+			 * later buffer position. No silence generated, no wasted DSP. */
+			int32_t* buf = sound_mono.data();
+			int32_t samplesToRender = sound_mono.size();
+			if (voice->startOffsetSamples > 0) {
+				int32_t stride = voice_rendered_in_stereo ? 2 : 1;
+				buf += voice->startOffsetSamples * stride;
+				samplesToRender -= voice->startOffsetSamples;
+				voice->startOffsetSamples = 0;
+				if (samplesToRender <= 0) {
+					++it;
+					continue;
+				}
+			}
+
+			bool stillGoing = voice->render(modelStackWithSoundFlags, buf, samplesToRender, voice_rendered_in_stereo,
+			                                applyingPanAtVoiceLevel, sourcesChanged, doLPF, doHPF, pitchAdjust);
 			if (!stillGoing) {
 				this->checkVoiceExists(voice, "E201");
 				this->freeActiveVoice(voice, modelStackWithSoundFlags, false);

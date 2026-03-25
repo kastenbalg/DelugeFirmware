@@ -119,6 +119,7 @@ bool Voice::noteOn(ModelStackWithSoundFlags* modelStack, int32_t newNoteCodeBefo
 	noteCodeAfterArpeggiation = newNoteCodeAfterArpeggiation;
 	orderSounded = lastSoundOrder++;
 	overrideAmplitudeEnvelopeReleaseRate = 0;
+	startOffsetSamples = (samplesLate < 128) ? static_cast<uint8_t>(samplesLate) : 127;
 
 	if (newNoteCodeAfterArpeggiation >= 128) {
 		sourceValues[util::to_underlying(PatchSource::NOTE)] = 2147483647;
@@ -710,12 +711,6 @@ uint32_t Voice::getLocalLFOPhaseIncrement(LFO_ID lfoId, deluge::modulation::para
 [[gnu::hot]] bool Voice::render(ModelStackWithSoundFlags* modelStack, int32_t* soundBuffer, int32_t numSamples,
                                 bool soundRenderingInStereo, bool applyingPanAtVoiceLevel, uint32_t sourcesChanged,
                                 bool doLPF, bool doHPF, int32_t externalPitchAdjust) {
-	// we spread out over a render cycle - allocating and starting the voice takes more time than rendering it so this
-	// avoids the cpu spike at note on
-	if (justCreated == false) {
-		justCreated = true;
-		return true;
-	}
 	GeneralMemoryAllocator::get().checkStack("Voice::render");
 
 	ParamManagerForTimeline* paramManager = (ParamManagerForTimeline*)modelStack->paramManager;
