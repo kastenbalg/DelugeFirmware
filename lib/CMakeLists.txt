@@ -21,7 +21,7 @@ FetchContent_Declare(freertos_kernel
         GIT_TAG V11.1.0
 )
 set(FREERTOS_PORT GCC_ARM_CA9 CACHE STRING "" FORCE)
-set(FREERTOS_HEAP 1 CACHE STRING "" FORCE) # heap_1: allocate-only, for FreeRTOS infrastructure (timer queue)
+unset(FREERTOS_HEAP CACHE) # No heap needed — configSUPPORT_DYNAMIC_ALLOCATION=0, no timer daemon
 set(FREERTOS_CONFIG_FILE_DIRECTORY
         "${CMAKE_SOURCE_DIR}/src/OSLikeStuff/freertos" CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(freertos_kernel)

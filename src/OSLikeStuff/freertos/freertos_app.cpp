@@ -131,11 +131,15 @@ static void ssiTxDmaISR(uint32_t intSense) {
 	/* Toggle which half just completed */
 	ssiTxHalfComplete ^= 1;
 
-	/* Notify the sequencer task from the DMA ISR.
-	 * The sequencer processes tick events and modifies voice state, then
-	 * notifies the audio task when it's safe to render. This ensures the
-	 * audio task never sees voice state mid-modification. */
+	/* Notify both audio and sequencer tasks.
+	 * Audio (priority 7) preempts and renders immediately using voice state
+	 * prepared by the sequencer's *previous* pass. The sequencer (priority 6)
+	 * runs after audio finishes, preparing voice state for the *next* buffer.
+	 * They naturally take turns — no concurrent access to voice state. */
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	if (audioTaskHandle != nullptr) {
+		vTaskNotifyGiveFromISR(audioTaskHandle, &xHigherPriorityTaskWoken);
+	}
 	if (sequencerTaskHandle != nullptr) {
 		vTaskNotifyGiveFromISR(sequencerTaskHandle, &xHigherPriorityTaskWoken);
 	}
@@ -234,24 +238,16 @@ static void sequencerTaskFunction(void* pvParameters) {
 
 	for (;;) {
 		/* Block until DMA half-buffer transfer completes (~2.9ms).
-		 * The DMA ISR wakes the sequencer, which processes tick events
-		 * and modifies voice state. After finishing, it notifies the
-		 * audio task to render. This guarantees the audio task never
-		 * sees voices mid-modification. */
+		 * The DMA ISR notifies both tasks. Audio (priority 7) runs first
+		 * and renders using voice state from our *previous* pass. When
+		 * audio finishes and blocks, we run and prepare voice state for
+		 * the *next* buffer. One buffer of latency, but no risk of
+		 * underrun from sequencer processing time. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
 		sequencerRoutine();
 
-		/* Signal the audio task that voice state is consistent and
-		 * ready to render. The audio task (priority 7) will preempt
-		 * us immediately. */
-		if (audioTaskHandle != nullptr) {
-			xTaskNotifyGive(audioTaskHandle);
-		}
-
-		/* Graphics update every ~5th wake-up (~14.5ms).
-		 * Runs after the audio task preempts and finishes rendering,
-		 * so we don't delay audio. */
+		/* Graphics update every ~5th wake-up (~14.5ms) */
 		if (++graphicsCounter >= 5) {
 			graphicsCounter = 0;
 			graphicsUpdate();
