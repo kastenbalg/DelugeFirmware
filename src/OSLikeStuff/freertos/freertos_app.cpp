@@ -64,8 +64,9 @@ static StackType_t sAudioTaskStack[4096];
 static StaticTask_t sClusterLoaderTCB;
 static StackType_t sClusterLoaderStack[2048];
 
-/* Global handle for task notification from ClusterPriorityQueue::enqueueCluster() */
+/* Global handles for task management */
 TaskHandle_t clusterLoaderTaskHandle = nullptr;
+TaskHandle_t audioTaskHandle = nullptr;
 
 /* Idle task (required when configSUPPORT_STATIC_ALLOCATION=1). */
 static StaticTask_t sIdleTaskTCB;
@@ -147,8 +148,18 @@ int32_t uartGetTxBufferSpace(int32_t item);
 
 static StaticTimer_t sGraphicsTimerBuffer;
 
+class Song;
+extern Song* currentSong;
+
 static void graphicsTimerCallback(TimerHandle_t xTimer) {
 	(void)xTimer;
+	/* Skip graphics updates when currentSong is null — this happens during
+	 * song loading after the old song is deleted but before the new one is
+	 * assigned. Many view graphicsRoutine() methods dereference currentSong
+	 * without null checks. */
+	if (currentSong == nullptr) {
+		return;
+	}
 	/* Only update if UART has space — matches existing GRAPHICS_ROUTINE behavior.
 	 * UART_ITEM_PIC_PADS = 1, kNumBytesInColUpdateMessage = 49 */
 	if (uartGetTxBufferSpace(1) > 49) {
@@ -173,8 +184,9 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	                                            sClusterLoaderStack, &sClusterLoaderTCB);
 
 	/* Audio task at highest priority — preempts everything */
-	xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */
-	                  sAudioTaskStack, &sAudioTaskTCB);
+	audioTaskHandle =
+	    xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */
+	                      sAudioTaskStack, &sAudioTaskTCB);
 
 	/* Graphics timer: 15ms auto-reload for deterministic playhead/LED updates.
 	 * The timer daemon runs at priority 6 and timer callbacks execute

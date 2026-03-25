@@ -88,10 +88,12 @@ extern void vClearTickInterrupt(void);
 #define configSETUP_TICK_INTERRUPT() vConfigureTickInterrupt()
 #define configCLEAR_TICK_INTERRUPT() vClearTickInterrupt()
 
-/* Assert: temporarily disabled to test vTaskSuspendAll approach.
- * TODO: re-enable once the crash source is identified. */
+/* Assert: use the existing Deluge freeze-with-error mechanism */
 extern void freezeWithError(const char* errmsg);
-#define configASSERT(x) (void)(x)
+#define configASSERT(x)                                                                                                \
+	if (!(x)) {                                                                                                        \
+		freezeWithError("RTOS");                                                                                       \
+	}
 
 /* Tick counter: 32-bit (required by FreeRTOS V11+) */
 #define configTICK_TYPE_WIDTH_IN_BITS TICK_TYPE_WIDTH_32_BITS

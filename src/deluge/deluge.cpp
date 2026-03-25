@@ -845,6 +845,10 @@ extern "C" int32_t deluge_main(void) {
 	{
 		extern void initSdCardMutex(void);
 		initSdCardMutex();
+#ifdef USE_FREERTOS
+		extern void sdhi_semaphore_init(void);
+		sdhi_semaphore_init();
+#endif
 	}
 
 	audioFileManager.init();
@@ -1161,6 +1165,9 @@ extern "C" void routineWithClusterLoading() {
 }
 
 void deleteOldSongBeforeLoadingNew() {
+	/* Note: under FreeRTOS, the cluster loader is suspended by the caller
+	 * (LoadSongUI::performLoad) before this function is called. This prevents
+	 * the loader from accessing freed memory during song deletion. */
 
 	currentSong->stopAllAuditioning();
 

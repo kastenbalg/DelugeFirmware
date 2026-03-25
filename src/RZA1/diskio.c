@@ -33,10 +33,6 @@
 #include "definitions.h"
 
 #include "OSLikeStuff/freertos/freertos_mutex.h"
-#ifdef USE_FREERTOS
-#include "FreeRTOS.h"
-#include "task.h"
-#endif
 #include "RZA1/compiler/asm/inc/asm.h"
 #include "RZA1/rspi/rspi.h"
 #include "RZA1/sdhi/inc/sdif.h"
@@ -207,6 +203,10 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
 
     BYTE err;
 
+#ifndef USE_FREERTOS
+    /* Under FreeRTOS, sdCardMutex serializes access — this boolean
+     * check is redundant and causes false positives when the cluster
+     * loader (pri 5) preempts the app task (pri 3) mid-operation. */
     if (currentlyAccessingCard)
     {
         if (ALPHA_OR_BETA_VERSION)
@@ -215,48 +215,22 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
             FREEZE_WITH_ERROR("E259");
         }
     }
+#endif
 
     // uint16_t startTime = MTU2.TCNT_0;
 
-#ifdef USE_FREERTOS
-    /* Read one sector at a time with vTaskSuspendAll per sector.
-     * The SDHI driver cannot tolerate ANY preemption during sd_read_sect
-     * (it accesses SDHI registers and sends card commands outside its
-     * own sddev_loc_cpu sections). Each single-sector read takes ~250us.
-     * sddev_loc_cpu/sddev_unl_cpu are no-ops — we handle suspension here.
-     * Between sectors, resume the scheduler so audio and timer can run. */
-    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
-    {
-        rtos_mutex_lock(sdCardMutex);
-        currentlyAccessingCard = 1;
-        err                    = 0;
+    /* Under FreeRTOS with semaphore-based SDHI waiting, sd_read_sect blocks
+     * on the SDHI semaphore during DMA transfers. The calling task sleeps,
+     * freeing the CPU for audio, timer daemon, and other tasks. No priority
+     * boosting or scheduler suspension is needed — the sdCardMutex serializes
+     * access, and the task sleeps (not polls) during hardware operations. */
+    rtos_mutex_lock(sdCardMutex);
+    currentlyAccessingCard = 1;
 
-        for (UINT i = 0; i < count; i++)
-        {
-            vTaskSuspendAll();
-            err = sd_read_sect(SD_PORT, buff + (i * 512), sector + i, 1);
-            xTaskResumeAll();
+    err = sd_read_sect(SD_PORT, buff, sector, count);
 
-            if (err != 0)
-            {
-                break;
-            }
-        }
-
-        currentlyAccessingCard = 0;
-        rtos_mutex_unlock(sdCardMutex);
-    }
-    else
-#endif
-    {
-        rtos_mutex_lock(sdCardMutex);
-        currentlyAccessingCard = 1;
-
-        err = sd_read_sect(SD_PORT, buff, sector, count);
-
-        currentlyAccessingCard = 0;
-        rtos_mutex_unlock(sdCardMutex);
-    }
+    currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
 
     if (err == 0)
     {
@@ -281,6 +255,7 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
 
     BYTE err;
 
+#ifndef USE_FREERTOS
     if (currentlyAccessingCard)
     {
         if (ALPHA_OR_BETA_VERSION)
@@ -288,40 +263,15 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
             FREEZE_WITH_ERROR("E258");
         }
     }
-
-#ifdef USE_FREERTOS
-    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
-    {
-        rtos_mutex_lock(sdCardMutex);
-        currentlyAccessingCard = 1;
-        err                    = 0;
-
-        for (UINT i = 0; i < count; i++)
-        {
-            vTaskSuspendAll();
-            err = sd_write_sect(SD_PORT, (const unsigned char*)buff + (i * 512), sector + i, 1, 0x0001u);
-            xTaskResumeAll();
-
-            if (err != 0)
-            {
-                break;
-            }
-        }
-
-        currentlyAccessingCard = 0;
-        rtos_mutex_unlock(sdCardMutex);
-    }
-    else
 #endif
-    {
-        rtos_mutex_lock(sdCardMutex);
-        currentlyAccessingCard = 1;
 
-        err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
+    rtos_mutex_lock(sdCardMutex);
+    currentlyAccessingCard = 1;
 
-        currentlyAccessingCard = 0;
-        rtos_mutex_unlock(sdCardMutex);
-    }
+    err = sd_write_sect(SD_PORT, buff, sector, count, 0x0001u);
+
+    currentlyAccessingCard = 0;
+    rtos_mutex_unlock(sdCardMutex);
 
     if (err == 0)
     {

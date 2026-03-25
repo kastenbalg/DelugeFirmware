@@ -25,6 +25,15 @@
 #include "scheduler_api.h"
 #include "util/cfunctions.h"
 
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "task.h"
+
+/* Declared in sd_dev_low.c */
+extern SemaphoreHandle_t sSdhiSemaphore;
+#endif
+
 uint16_t stopTime;
 
 bool wrappedCheckTimer() {
@@ -70,7 +79,58 @@ bool sdIntFinished() {
 int32_t sddev_int_wait(int32_t sd_port, int32_t time) {
 
 	logAudioAction("sddev_int_wait");
-	int32_t loop;
+
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, block on the SDHI semaphore instead of polling.
+	 * The ISR (sddev_sd_int_handler_0/1) gives this semaphore when
+	 * the SDHI interrupt fires. The calling task sleeps, freeing the
+	 * CPU for audio, timer daemon, and other tasks.
+	 *
+	 * Before the scheduler is running (boot), fall through to the
+	 * polling path below. */
+	if (sSdhiSemaphore != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+		/* Check if the interrupt already fired before we got here */
+		if (sd_check_int(sd_port) == SD_OK) {
+			return SD_OK;
+		}
+
+		/* Block on semaphore. The ISR (sddev_sd_int_handler_0/1) gives
+		 * this semaphore when any SDHI interrupt fires. Since multiple
+		 * interrupts occur per sd_read_sect (command response, data
+		 * transfer, etc.), the semaphore may fire for a different event
+		 * than the one we're waiting for. In that case, sd_check_int
+		 * returns SD_ERR and we retry the semaphore. */
+		TickType_t ticks = pdMS_TO_TICKS(time);
+		if (ticks == 0) {
+			ticks = 1;
+		}
+		TickType_t deadline = xTaskGetTickCount() + ticks;
+
+		while (1) {
+			TickType_t remaining = deadline - xTaskGetTickCount();
+			if ((int32_t)remaining <= 0) {
+				break;
+			}
+			if (xSemaphoreTake(sSdhiSemaphore, remaining) == pdTRUE) {
+				/* Semaphore given — check if OUR expected flags are set */
+				if (sd_check_int(sd_port) == SD_OK) {
+					return SD_OK;
+				}
+				/* Wrong event — retry semaphore for the real one */
+				continue;
+			}
+			/* Semaphore timed out */
+			break;
+		}
+
+		/* Final check in case interrupt fired during timeout logic */
+		if (sd_check_int(sd_port) == SD_OK) {
+			return SD_OK;
+		}
+		return SD_ERR;
+	}
+#endif
+
 #ifdef USE_TASK_MANAGER
 	if (yieldingRoutineWithTimeoutForSD(sdIntFinished, time / 1000.)) {
 		return SD_OK;
@@ -78,8 +138,8 @@ int32_t sddev_int_wait(int32_t sd_port, int32_t time) {
 	else
 		return SD_ERR;
 #else
+	int32_t loop;
 	if (time > 500) {
-		/* @1000ms */
 		loop = (time / 500);
 		if ((time % 500) != 0) {
 			loop++;
@@ -94,18 +154,14 @@ int32_t sddev_int_wait(int32_t sd_port, int32_t time) {
 		sddev_start_timer(time);
 
 		while (1) {
-
-			/* interrupt generated? */
 			if (sd_check_int(sd_port) == SD_OK) {
 				sddev_end_timer();
 				return SD_OK;
 			}
-			/* detect timeout? */
 			if (sddev_check_timer() == SD_ERR) {
 				break;
 			}
-			// called during command execution
-			routineForSD(); // By Rohan, obviously
+			routineForSD();
 		}
 
 		loop--;

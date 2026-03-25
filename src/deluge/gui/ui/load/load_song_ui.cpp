@@ -16,6 +16,11 @@
  */
 
 #include "gui/ui/load/load_song_ui.h"
+
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
 #include "definitions_cxx.hpp"
 #include "extern.h"
 #include "gui/colour/colour.h"
@@ -313,7 +318,10 @@ void LoadSongUI::doQueueLoadNextSongIfAvailable(int8_t offset) {
 }
 
 // Before calling this, you must set loadButtonReleased.
+extern "C" void terminate_set_context(const char* ctx);
+
 void LoadSongUI::performLoad() {
+	terminate_set_context("TLD1"); /* Terminate during song load - init */
 	performingLoad = true;
 	FileItem* currentFileItem = getCurrentFileItem();
 
@@ -333,6 +341,7 @@ void LoadSongUI::performLoad() {
 	}
 	Error error;
 
+	terminate_set_context("TLD2"); /* Terminate during song load - open file */
 	error = StorageManager::openDelugeFile(currentFileItem, "song");
 
 	currentUIMode = UI_MODE_LOADING_SONG_ESSENTIAL_SAMPLES;
@@ -344,24 +353,42 @@ void LoadSongUI::performLoad() {
 
 	deletedPartsOfOldSong = true;
 
+#ifdef USE_FREERTOS
+	/* Suspend the cluster loader for the entire song load process.
+	 * The loader competes for memory and SD card access during readFromFile,
+	 * causing allocation failures and intermittent crashes. It will be
+	 * resumed after the song is fully loaded or on error. */
+	extern TaskHandle_t clusterLoaderTaskHandle;
+	vTaskSuspend(clusterLoaderTaskHandle);
+#endif
+
 	// If not currently playing, don't load both songs at once (this avoids any RAM overfilling, fragmentation etc.)
 	if (!playbackHandler.isEitherClockActive()) {
 		// Otherwise, a timer might get called and try to access Clips that we may have deleted below (really?)
 		uiTimerManager.unsetTimer(TimerName::PLAY_ENABLE_FLASH);
 
+		terminate_set_context("TLD7"); /* Terminate during song load - deleteOldSong */
 		deleteOldSongBeforeLoadingNew();
 	}
 	else {
 		// Note: this is dodgy, but in this case we don't reset view.activeControllableClip here - we let the user keep
 		// fiddling with it. It won't get deleted.
 		AudioEngine::logAction("arming for song swap");
+		terminate_set_context("TLD8"); /* Terminate during song load - songSwap */
 		AudioEngine::songSwapAboutToHappen();
 		AudioEngine::logAction("song swap armed");
 		playbackHandler.songSwapShouldPreserveTempo = Buttons::isButtonPressed(deluge::hid::button::TEMPO_ENC);
 	}
 
+	terminate_set_context("TLD6"); /* Terminate during song load - alloc Song */
 	void* songMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(Song));
+	terminate_set_context("TD6A"); /* alloc returned */
 	if (!songMemory) {
+		/* Diagnostic: display sizeof(Song) on 7-seg so we can see it.
+		 * Freezes with the size displayed — press power to restart. */
+		char buf[12];
+		intToString((int)sizeof(Song), buf);
+		freezeWithError(buf);
 ramError:
 		error = Error::INSUFFICIENT_RAM;
 
@@ -369,6 +396,10 @@ someError:
 		display->displayError(error);
 		activeDeserializer->closeWriter();
 fail:
+#ifdef USE_FREERTOS
+		/* Ensure loader is resumed on any error path */
+		vTaskResume(clusterLoaderTaskHandle);
+#endif
 		// If we already deleted the old song, make a new blank one. This will take us back to InstrumentClipView.
 		if (!currentSong) {
 			// If we're here, it's most likely because of a file error. On paper, a RAM error could be possible too.
@@ -377,73 +408,13 @@ fail:
 		}
 
 		// Otherwise, stay here in this UI
-
-		preLoadedSong = new (songMemory) Song();
-		error = preLoadedSong->paramManager.setupUnpatched();
-		if (error != Error::NONE) {
-
-			void* toDealloc = dynamic_cast<void*>(preLoadedSong);
-			preLoadedSong->~Song(); // Will also delete paramManager
-			delugeDealloc(toDealloc);
-			preLoadedSong = nullptr;
-			goto someError;
-		}
-
-		GlobalEffectable::initParams(&preLoadedSong->paramManager);
-
-		AudioEngine::logAction("c");
-
-		// Will return false if we ran out of RAM. This isn't currently detected for while loading ParamNodes, but
-		// chances are, after failing on one of those, it'd try to load something else and that would fail.
-
-		error = preLoadedSong->readFromFile(*activeDeserializer);
-
-		if (error != Error::NONE) {
-			goto gotErrorAfterCreatingSong;
-		}
-		AudioEngine::logAction("d");
-
-		FRESULT success = activeDeserializer->closeWriter();
-		if (success != FR_OK) {
-			display->displayPopup(deluge::l10n::get(deluge::l10n::String::STRING_FOR_ERROR_LOADING_SONG));
-			goto fail;
-		}
-
-		preLoadedSong->dirPath.set(&currentDir);
-
-		String currentFilenameWithoutExtension;
-		error = currentFileItem->getFilenameWithoutExtension(&currentFilenameWithoutExtension);
-		if (error != Error::NONE) {
-			goto gotErrorAfterCreatingSong;
-		}
-
-		error = audioFileManager.setupAlternateAudioFileDir(audioFileManager.alternateAudioFileLoadPath,
-		                                                    currentDir.get(), currentFilenameWithoutExtension);
-		if (error != Error::NONE) {
-			goto gotErrorAfterCreatingSong;
-		}
-		audioFileManager.thingBeginningLoading(ThingType::SONG);
-
-		// Search existing RAM for all samples, to lay a claim to any which will be needed for this new Song.
-		// Do this before loading any new Samples from file, in case we were in danger of discarding any from RAM that
-		// we might actually want
-		preLoadedSong->loadAllSamples(false);
-
-		// Load samples from files, just for currently playing Sounds (or if not playing, then all Sounds)
-		if (playbackHandler.isEitherClockActive()) {
-			preLoadedSong->loadCrucialSamplesOnly();
-		}
-
-		else {
-			displayText(false);
-		}
-		currentUIMode = UI_MODE_NONE;
-		display->removeWorkingAnimation();
 		performingLoad = false;
 		return;
 	}
 
+	terminate_set_context("TD6B"); /* Song constructor */
 	preLoadedSong = new (songMemory) Song();
+	terminate_set_context("TD6C"); /* setupUnpatched */
 	error = preLoadedSong->paramManager.setupUnpatched();
 	if (error != Error::NONE) {
 gotErrorAfterCreatingSong:
@@ -454,10 +425,12 @@ gotErrorAfterCreatingSong:
 		goto someError;
 	}
 
+	terminate_set_context("TD6D"); /* initParams */
 	GlobalEffectable::initParams(&preLoadedSong->paramManager);
 
 	AudioEngine::logAction("initialized new song");
 
+	terminate_set_context("TD6E"); /* readFromFile */
 	// Will return false if we ran out of RAM. This isn't currently detected for while loading ParamNodes, but chances
 	// are, after failing on one of those, it'd try to load something else and that would fail.
 	error = preLoadedSong->readFromFile(*activeDeserializer);
@@ -485,6 +458,12 @@ gotErrorAfterCreatingSong:
 	if (error != Error::NONE) {
 		goto gotErrorAfterCreatingSong;
 	}
+
+#ifdef USE_FREERTOS
+	/* Resume the cluster loader before sample loading — loadAllSamples will
+	 * enqueue clusters that the loader needs to process. */
+	vTaskResume(clusterLoaderTaskHandle);
+#endif
 
 	audioFileManager.thingBeginningLoading(ThingType::SONG);
 

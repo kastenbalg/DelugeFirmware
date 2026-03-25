@@ -58,6 +58,28 @@ Includes   <System Includes> , "Project Includes"
 #ifdef USE_FREERTOS
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
+
+/* Binary semaphore for SDHI interrupt-driven waiting.
+ * Given from sd_int_handler ISR, taken by sddev_int_wait.
+ * This replaces busy-wait polling with proper RTOS blocking. */
+static StaticSemaphore_t sSdhiSemaphoreStorage;
+SemaphoreHandle_t sSdhiSemaphore = NULL;
+
+void sdhi_semaphore_init(void) {
+    sSdhiSemaphore = xSemaphoreCreateBinaryStatic(&sSdhiSemaphoreStorage);
+}
+
+/* Called from sd_int_handler (ISR context) to wake the waiting task.
+ * IMPORTANT: SDHI interrupt priority must be at or below (numerically >=)
+ * configMAX_API_CALL_INTERRUPT_PRIORITY for this to be safe. */
+void sdhi_semaphore_give_from_isr(void) {
+    if (sSdhiSemaphore != NULL) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xSemaphoreGiveFromISR(sSdhiSemaphore, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
 #endif
 
 /******************************************************************************
@@ -69,7 +91,16 @@ Typedef definitions
 Macro definitions
 ******************************************************************************/
 #define MTU_TIMER_CNT      33    /* P-phy = 33MHz         */
-#define INT_LEVEL_SDHI     10    /* SDHI interrupt level  */
+#ifdef USE_FREERTOS
+/* Under FreeRTOS, SDHI interrupts must be at or below (numerically >=)
+ * configMAX_API_CALL_INTERRUPT_PRIORITY (18) so that xSemaphoreGiveFromISR
+ * can be called from the ISR. Priority 20 is safely within the managed zone.
+ * The actual DMA transfer speed is unaffected — only ISR dispatch latency
+ * increases slightly during FreeRTOS critical sections. */
+#define INT_LEVEL_SDHI     19
+#else
+#define INT_LEVEL_SDHI     10    /* SDHI interrupt level (bare-metal) */
+#endif
 
 
 /******************************************************************************
@@ -1037,6 +1068,43 @@ int sddev_wait_dma_end(int sd_port, long cnt)
 static int sddev_wait_dma_end_0(long cnt)
 {
 #ifdef    SDCFG_TRNS_DMA
+
+#ifdef USE_FREERTOS
+    /* Under FreeRTOS, block on semaphore while DMA runs autonomously.
+     * The SDHI interrupt gives the semaphore when DMA completes.
+     * Retry on spurious wakes (interrupt for non-DMA event). */
+    if (sSdhiSemaphore != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        if (sd_DMAC_Get_Endflag(SD0_DMA_CHANNEL) == 1) {
+            return SD_OK;
+        }
+        int time = (cnt / 512);
+        time = ((time * 1000) / 1024);
+        if (time < 1000) time = 1000;
+        TickType_t ticks = pdMS_TO_TICKS(time);
+        if (ticks == 0) ticks = 1;
+        TickType_t deadline = xTaskGetTickCount() + ticks;
+
+        while (1) {
+            TickType_t remaining = deadline - xTaskGetTickCount();
+            if ((int32_t)remaining <= 0) {
+                break;
+            }
+            if (xSemaphoreTake(sSdhiSemaphore, remaining) == pdTRUE) {
+                if (sd_DMAC_Get_Endflag(SD0_DMA_CHANNEL) == 1) {
+                    return SD_OK;
+                }
+                continue; /* Spurious wake — retry */
+            }
+            break; /* Timeout */
+        }
+        if (sd_DMAC_Get_Endflag(SD0_DMA_CHANNEL) == 1) {
+            return SD_OK;
+        }
+        return SD_ERR;
+    }
+#endif /* USE_FREERTOS */
+
+    /* Polling fallback (boot path or non-FreeRTOS) */
     int loop;
     int time;
 
@@ -1049,7 +1117,6 @@ static int sddev_wait_dma_end_0(long cnt)
 
     if (time > (0x0000ffff / MTU_TIMER_CNT))
     {
-        /* @1000ms */
         loop = (time / 1000);
         if ( (time % 1000) != 0 )
         {
@@ -1067,13 +1134,11 @@ static int sddev_wait_dma_end_0(long cnt)
 
         while (1)
         {
-            /* get end flag? */
             if ( sd_DMAC_Get_Endflag(SD0_DMA_CHANNEL) == 1 )
             {
                 sddev_end_timer();
                 return SD_OK;
             }
-            /* detect timeout? */
             if (sddev_check_timer() == SD_ERR)
             {
                 break;
@@ -1110,13 +1175,48 @@ return sd_DMAC_Get_Endflag(SD1_DMA_CHANNEL) == 1;
 static int sddev_wait_dma_end_1(long cnt)
 {
 #ifdef    SDCFG_TRNS_DMA
+
+#ifdef USE_FREERTOS
+    /* Same semaphore approach as sddev_wait_dma_end_0 — see comments there */
+    if (sSdhiSemaphore != NULL && xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        if (sd_DMAC_Get_Endflag(SD1_DMA_CHANNEL) == 1) {
+            return SD_OK;
+        }
+        int time = cnt >> 9;
+        time = ((time * 1000) >> 10);
+        if (time < 2000) time = 2000;
+        TickType_t ticks = pdMS_TO_TICKS(time);
+        if (ticks == 0) ticks = 1;
+        TickType_t deadline = xTaskGetTickCount() + ticks;
+
+        while (1) {
+            TickType_t remaining = deadline - xTaskGetTickCount();
+            if ((int32_t)remaining <= 0) {
+                break;
+            }
+            if (xSemaphoreTake(sSdhiSemaphore, remaining) == pdTRUE) {
+                if (sd_DMAC_Get_Endflag(SD1_DMA_CHANNEL) == 1) {
+                    return SD_OK;
+                }
+                continue; /* Spurious wake — retry */
+            }
+            break; /* Timeout */
+        }
+        if (sd_DMAC_Get_Endflag(SD1_DMA_CHANNEL) == 1) {
+            return SD_OK;
+        }
+        return SD_ERR;
+    }
+#endif /* USE_FREERTOS */
+
+    /* Polling fallback */
     int loop = 0;
     int time;
 
     time = cnt >> 9;
     time = ((time * 1000) >> 10);
 
-    if (time < 2000) time = 2000; // I've seen block write operations sometimes just randomly take as long as 1250ms, despite it normally being 2ms
+    if (time < 2000) time = 2000;
 #ifdef USE_TASK_MANAGER
     if (yieldingRoutineWithTimeoutForSD(sd_DMAC_Get_Endflag1, time/1000.)) {
         return SD_OK;
@@ -1135,20 +1235,17 @@ static int sddev_wait_dma_end_1(long cnt)
 
         while (1)
         {
-
-            /* get end flag? */
             if ( sd_DMAC_Get_Endflag(SD1_DMA_CHANNEL) == 1 )
             {
                 sddev_end_timer();
                 return SD_OK;
             }
-            /* detect timeout? */
             if (sddev_check_timer() == SD_ERR)
             {
                 break;
             }
 
-            routineForSD(); // By Rohan. // called during reads
+            routineForSD();
         }
     } while (loop--);
 
@@ -1268,6 +1365,9 @@ int sddev_finalize(int sd_port)
 static void sddev_sd_int_handler_0(uint32_t int_sense)
 {
     sd_int_handler(0);
+#ifdef USE_FREERTOS
+    sdhi_semaphore_give_from_isr();
+#endif
 }
 
 /******************************************************************************
@@ -1279,6 +1379,9 @@ static void sddev_sd_int_handler_0(uint32_t int_sense)
 static void sddev_sd_int_handler_1(uint32_t int_sense)
 {
     sd_int_handler(1);
+#ifdef USE_FREERTOS
+    sdhi_semaphore_give_from_isr();
+#endif
 }
 
 /******************************************************************************
