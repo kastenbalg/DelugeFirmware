@@ -48,7 +48,11 @@ extern void freezeWithError(char const* errmsg);
 /// Runs as 32.792 ticks per microsecond (33.792 MHz)
 #define TIMER_SYSTEM_SUPERFAST 1
 
+#ifdef USE_FREERTOS
+#define SSI_TX_BUFFER_NUM_SAMPLES 256 /* Ping-pong: two 128-sample halves, 2.9ms per half at 44.1kHz */
+#else
 #define SSI_TX_BUFFER_NUM_SAMPLES 128
+#endif
 #define SSI_RX_BUFFER_NUM_SAMPLES 2048
 #define NUM_MONO_INPUT_CHANNELS (NUM_STEREO_INPUT_CHANNELS * 2)
 #define NUM_MONO_OUTPUT_CHANNELS (NUM_STEREO_OUTPUT_CHANNELS * 2)

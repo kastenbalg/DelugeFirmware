@@ -19,7 +19,14 @@
 
 #include <stdint.h>
 
+#ifdef USE_FREERTOS
+extern const uint32_t ssiDmaTxLinkDescriptorA[];
+extern const uint32_t ssiDmaTxLinkDescriptorB[];
+extern const uint32_t* ssiDmaTxLinkDescriptor;
+extern volatile uint8_t ssiTxHalfComplete;
+#else
 extern const uint32_t ssiDmaTxLinkDescriptor[];
+#endif
 extern const uint32_t ssiDmaRxLinkDescriptor[];
 
 void ssiInit(uint8_t ssiChannel, uint8_t dmaChannel);
@@ -32,3 +39,8 @@ int32_t* getTxBufferStart();
 int32_t* getTxBufferEnd();
 int32_t* getRxBufferStart();
 int32_t* getRxBufferEnd();
+
+#ifdef USE_FREERTOS
+int32_t* getTxBufferHalfPoint();
+void ssiTxDmaInterruptInit(void);
+#endif

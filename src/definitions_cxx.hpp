@@ -793,7 +793,11 @@ constexpr int32_t kInputPercBufferSize = (kInputRawBufferSize >> kPercBufferRedu
 #define TIME_STRETCH_ENABLE_BUFFER 0
 
 namespace TimeStretch {
+#ifdef USE_FREERTOS
+constexpr int32_t kDefaultFirstHopLength = SSI_TX_BUFFER_NUM_SAMPLES; /* Must be >= buffer size for cache crossfade */
+#else
 constexpr int32_t kDefaultFirstHopLength = 200;
+#endif
 
 namespace Crossfade {
 

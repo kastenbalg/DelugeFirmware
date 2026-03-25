@@ -98,21 +98,83 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskNa
 }
 
 /* --------------------------------------------------------------------------
- * Audio task: highest priority, runs AudioEngine::routine() in a loop
+ * Audio task: interrupt-driven via SSI TX DMA ping-pong descriptors.
+ *
+ * Two DMA descriptors (A and B) each cover half the 256-sample TX buffer.
+ * When each 128-sample half-buffer transfer completes (~2.9ms at 44.1kHz),
+ * the DMA interrupt fires and notifies the audio task. The audio task wakes,
+ * renders into the half that just finished playing, then sleeps until the
+ * next interrupt. Multiple notifications are drained for overload recovery.
+ *
+ * This replaces the polling approach (vTaskDelayUntil + getTxBufferCurrentPlace)
+ * with deterministic hardware-driven scheduling:
+ * - No wasted CPU cycles polling DMA position
+ * - Precise timing — the task wakes exactly when samples are needed
+ * - CPU is free for cluster loading, UI, and other tasks between renders
  * -------------------------------------------------------------------------- */
+#include "OSLikeStuff/timers_interrupts/timers_interrupts.h"
+#include "RZA1/intc/devdrv_intc.h"
+#include "RZA1/system/iodefines/dmac_iodefine.h"
+#include "definitions.h"
+#include "drivers/dmac/dmac.h"
+#include "drivers/ssi/ssi.h"
+
 namespace AudioEngine {
 void routine();
 }
 
+/* DMA interrupt handler for SSI TX (channel 6).
+ * Called when each half-buffer DMA transfer completes.
+ * Notifies the audio task to render the next half. */
+static void ssiTxDmaISR(uint32_t intSense) {
+	(void)intSense;
+
+	/* The DMAC automatically chains to the next linked descriptor and
+	 * continues transferring. We don't need to restart the channel.
+	 * Just clear the transfer-end status bit so the next interrupt fires. */
+	DMACn(SSI_TX_DMA_CHANNEL).CHCTRL_n = 0x00000040uL; /* CLRTC: clear transfer complete flag */
+
+	/* Toggle which half just completed */
+	ssiTxHalfComplete ^= 1;
+
+	/* Notify audio task from ISR */
+	if (audioTaskHandle != nullptr) {
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		vTaskNotifyGiveFromISR(audioTaskHandle, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+}
+
+/* Initialize the DMA interrupt for SSI TX.
+ * Must be called after the scheduler starts (interrupt priority must be
+ * in the FreeRTOS managed zone). */
+void ssiTxDmaInterruptInit(void) {
+	/* DMA channel 6 interrupt ID = INTC_ID_DMAINT0 + 6 = 47
+	 * Priority 19: within FreeRTOS managed zone (>= configMAX_API_CALL_INTERRUPT_PRIORITY=18)
+	 * so xTaskNotifyGiveFromISR can be called safely from the ISR. */
+	setupAndEnableInterrupt(ssiTxDmaISR, DMA_INTERRUPT_0 + SSI_TX_DMA_CHANNEL, 19);
+
+	/* Clear interrupt mask on the DMA channel to allow interrupts */
+	DMACn(SSI_TX_DMA_CHANNEL).CHCTRL_n |= 0x00020000uL; /* CLRINTMSK */
+}
+
 static void audioTaskFunction(void* pvParameters) {
 	(void)pvParameters;
-	TickType_t xLastWakeTime = xTaskGetTickCount();
+
+	/* Initialize the DMA interrupt now that the scheduler is running */
+	ssiTxDmaInterruptInit();
+
 	for (;;) {
+		/* Block until DMA half-buffer transfer completes.
+		 * The ISR fires every 128 samples (~2.9ms at 44.1kHz).
+		 *
+		 * The audio engine manages its own render window sizing internally
+		 * (tickSongFinalizeWindows adjusts numSamples to align with
+		 * sequencer tick boundaries). routine() checks the DMA buffer
+		 * position and renders however many samples are needed to keep
+		 * the buffer fed. The interrupt just ensures timely wakeup. */
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		AudioEngine::routine();
-		/* Wake every ~1ms. Audio polls DMA buffer position inside routine()
-		 * to determine how many samples to render. With 1kHz tick this wakes
-		 * roughly every 1.45ms worth of audio (64 samples @ 44.1kHz). */
-		vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1));
 	}
 }
 
