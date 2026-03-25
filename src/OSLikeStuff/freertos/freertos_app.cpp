@@ -226,10 +226,87 @@ static void graphicsUpdate() {
 	}
 }
 
-/* Placeholder for sequencer tick logic — will be implemented in Step 4.
- * For now, this is a no-op so the task structure compiles and runs. */
+/* --------------------------------------------------------------------------
+ * Sequencer tick advancement — moved from AudioEngine::tickSongFinalizeWindows.
+ *
+ * Processes all ticks that fall within the current half-buffer period.
+ * Unlike the old code, this does NOT split render windows — the audio task
+ * always renders a full 128-sample half-buffer. The sequencer fires all
+ * tick events and modifies voice state; the audio task renders the result
+ * on its next wake-up (one buffer of latency).
+ * -------------------------------------------------------------------------- */
+#include "definitions.h"
+#include "playback/playback_handler.h"
+#include "processing/engines/audio_engine.h"
+
+#define TICK_TYPE_SWUNG 1
+#define TICK_TYPE_TIMER 2
+
+static constexpr size_t kHalfBufferSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
+
 static void sequencerRoutine() {
-	/* TODO: Phase 6b Step 4 — move tick logic from audio engine here */
+	/* Poll MIDI/analog clock input */
+	playbackHandler.routine();
+
+	if (!playbackHandler.isEitherClockActive()) {
+		playbackHandler.publishTempoState();
+		return;
+	}
+
+	/* Process all ticks that fall within this half-buffer period.
+	 * audioSampleTimer is the start of the buffer the audio task just rendered
+	 * (audio runs before us). We process ticks for the *next* buffer. */
+	uint32_t bufferEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
+
+	for (;;) {
+		int32_t nextTickType = 0;
+		uint32_t timeNextTick = AudioEngine::audioSampleTimer + 9999;
+
+		if (playbackHandler.isInternalClockActive()) {
+			timeNextTick = playbackHandler.timeNextTimerTickBig >> 32;
+			nextTickType = TICK_TYPE_TIMER;
+		}
+
+		if (playbackHandler.swungTickScheduled
+		    && (int32_t)(playbackHandler.scheduledSwungTickTime - timeNextTick) < 0) {
+			timeNextTick = playbackHandler.scheduledSwungTickTime;
+			nextTickType = TICK_TYPE_SWUNG;
+		}
+
+		/* If next tick is beyond this buffer, we're done */
+		if ((int32_t)(timeNextTick - bufferEnd) >= 0) {
+			break;
+		}
+
+		/* Fire the tick */
+		if (nextTickType == TICK_TYPE_TIMER) {
+			playbackHandler.actionTimerTick();
+		}
+		else if (nextTickType == TICK_TYPE_SWUNG) {
+			playbackHandler.actionSwungTick();
+			playbackHandler.scheduleSwungTick();
+		}
+
+		/* Handle MIDI clock and trigger clock output.
+		 * TODO Step 7: move to hardware timer for sub-buffer precision. */
+		if (playbackHandler.triggerClockOutTickScheduled) {
+			int32_t timeTil = playbackHandler.timeNextTriggerClockOutTick - AudioEngine::audioSampleTimer;
+			if (timeTil < (int32_t)kHalfBufferSamples) {
+				playbackHandler.doTriggerClockOutTick();
+				playbackHandler.scheduleTriggerClockOutTick();
+			}
+		}
+
+		if (playbackHandler.midiClockOutTickScheduled) {
+			int32_t timeTil = playbackHandler.timeNextMIDIClockOutTick - AudioEngine::audioSampleTimer;
+			if (timeTil < (int32_t)kHalfBufferSamples) {
+				playbackHandler.doMIDIClockOutTick();
+				playbackHandler.scheduleMIDIClockOutTick();
+			}
+		}
+	}
+
+	playbackHandler.publishTempoState();
 }
 
 static void sequencerTaskFunction(void* pvParameters) {

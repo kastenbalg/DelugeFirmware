@@ -578,70 +578,34 @@ void renderAudioForStemExport(size_t numSamples);
 void dumpAudioLog();
 bool calledFromScheduler = false;
 
-/// inner loop of audio rendering, deliberately not in header
-[[gnu::hot]] void routine_() {
-	static double last_call_time = getSystemTime();
-	double current_time = getSystemTime();
-	if (current_time - last_call_time > 0.003) {
-		// If the audio routine is called at less than a 3ms interval, something is wrong
-		D_PRINTLN("Audio routine latency high: %.3fms", (current_time - last_call_time) * 1000.);
-	}
-	last_call_time = current_time;
-#ifndef USE_TASK_MANAGER
-	playbackHandler.routine();
-#endif
-	// At this point, there may be MIDI, including clocks, waiting to be sent.
+/// Fixed half-buffer size for DMA interrupt-driven rendering.
+/// 128 samples = one half of the 256-sample ping-pong TX buffer (~2.9ms at 44.1kHz).
+constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 
+/// inner loop of audio rendering, deliberately not in header.
+/// With DMA interrupt-driven scheduling, this renders exactly one half-buffer
+/// (128 samples) per invocation. No tick logic — the sequencer task handles that.
+[[gnu::hot]] void routine_() {
 	GeneralMemoryAllocator::get().checkStack("AudioDriver::routine");
 
-	saddr = (uint32_t)(getTxBufferCurrentPlace());
-	uint32_t saddrPosAtStart = saddr >> (2 + NUM_MONO_OUTPUT_CHANNELS_MAGNITUDE);
-	size_t numSamples = ((uint32_t)(saddr - i2sTXBufferPos) >> (2 + NUM_MONO_OUTPUT_CHANNELS_MAGNITUDE))
-	                    & (SSI_TX_BUFFER_NUM_SAMPLES - 1);
-
-	if (numSamples <= (10 * numRoutines)) {
-		if (!numRoutines && calledFromScheduler) {
-			ignoreForStats();
-		}
-		return;
-	}
 #if AUTOMATED_TESTER_ENABLED
 	AutomatedTester::possiblyDoSomething();
 #endif
 	flushMIDIGateBuffers();
-	setDireness(numSamples);
 
-	// Double the number of samples we're going to do - within some constraints
-	int32_t sampleThreshold = 6; // If too low, it'll lead to bigger audio windows and stuff
-	constexpr size_t maxAdjustedNumSamples = SSI_TX_BUFFER_NUM_SAMPLES;
+	constexpr size_t numSamples = kHalfBufferNumSamples;
 
-	int32_t unadjustedNumSamplesBeforeLappingPlayHead = numSamples;
-
-	if (numSamples < maxAdjustedNumSamples) {
-		int32_t samplesOverThreshold = numSamples - sampleThreshold;
-		if (samplesOverThreshold > 0) {
-			samplesOverThreshold = samplesOverThreshold << 1;
-			numSamples = sampleThreshold + samplesOverThreshold;
-			numSamples = std::min(numSamples, maxAdjustedNumSamples);
-		}
-	}
-
-	// Want to round to be doing a multiple of 4 samples, so the NEON functions can be utilized most efficiently.
-	// Note - this can take numSamples up as high as SSI_TX_BUFFER_NUM_SAMPLES (currently 128).
-	if (numSamples >= 3) {
-		numSamples = (numSamples + 2) & ~3;
-	}
 	voices_started_this_render = 0;
-
-	int32_t timeWithinWindowAtWhichMIDIOrGateOccurs;
-	tickSongFinalizeWindows(numSamples, timeWithinWindowAtWhichMIDIOrGateOccurs);
 
 	numSamplesLastTime = numSamples;
 
 	renderAudio(numSamples);
 
-	scheduleMidiGateOutISR(saddrPosAtStart, unadjustedNumSamplesBeforeLappingPlayHead,
-	                       timeWithinWindowAtWhichMIDIOrGateOccurs);
+	/* MIDI/gate output scheduling — for now pass defaults.
+	 * Step 7 will move clock output to the sequencer task via Timer 2. */
+	saddr = (uint32_t)(getTxBufferCurrentPlace());
+	uint32_t saddrPosAtStart = saddr >> (2 + NUM_MONO_OUTPUT_CHANNELS_MAGNITUDE);
+	scheduleMidiGateOutISR(saddrPosAtStart, numSamples, 0);
 
 #if DO_AUDIO_LOG
 	dumpAudioLog();
@@ -1060,22 +1024,17 @@ void routine() {
 	audioMutexUnlock();
 }
 
-/* Called with the audio mutex already held. */
+/* Called with the audio mutex already held.
+ * With DMA interrupt-driven scheduling, renders one half-buffer per wake-up.
+ * The stem export path is shelved for reimplementation outside the audio engine. */
 static void routine_locked() {
 
 	numRoutines = 0;
 	if (!stemExport.processStarted || (stemExport.processStarted && !stemExport.renderOffline)) {
-		while (doSomeOutputting() && numRoutines < 2) {
-
-#ifndef USE_TASK_MANAGER
-			if (numRoutines > 0) {
-				deluge::hid::encoders::readEncoders();
-				deluge::hid::encoders::interpretEncoders(true);
-			}
-#endif
-			routine_();
-			numRoutines += 1;
-		}
+		doSomeOutputting();
+		routine_();
+		numRoutines = 1;
+		doSomeOutputting();
 	}
 	else {
 		if (!sdRoutineLock) {
