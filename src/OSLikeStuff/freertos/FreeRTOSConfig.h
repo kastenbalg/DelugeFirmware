@@ -44,9 +44,9 @@
 /* Memory: static allocation only to avoid conflict with the existing
  * GeneralMemoryAllocator. No FreeRTOS heap is used. */
 #define configSUPPORT_STATIC_ALLOCATION 1
-#define configSUPPORT_DYNAMIC_ALLOCATION 1
+#define configSUPPORT_DYNAMIC_ALLOCATION 0
 #define configMINIMAL_STACK_SIZE ((uint32_t)256)
-#define configTOTAL_HEAP_SIZE 1024 /* Small heap for FreeRTOS infrastructure (timer queue, etc.) */
+#define configTOTAL_HEAP_SIZE 0
 
 /* Features */
 #define configUSE_MUTEXES 1
@@ -54,10 +54,7 @@
 #define configUSE_COUNTING_SEMAPHORES 0
 #define configUSE_QUEUE_SETS 0
 #define configUSE_TASK_NOTIFICATIONS 1
-#define configUSE_TIMERS 1
-#define configTIMER_TASK_PRIORITY (configMAX_PRIORITIES - 2) /* Priority 6 — below audio (7), above loader (5) */
-#define configTIMER_QUEUE_LENGTH 8
-#define configTIMER_TASK_STACK_DEPTH 1024 /* 4KB stack for timer daemon task */
+#define configUSE_TIMERS 0
 #define configUSE_CO_ROUTINES 0
 #define configUSE_TRACE_FACILITY 0
 #define configUSE_STATS_FORMATTING_FUNCTIONS 0

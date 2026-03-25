@@ -18,10 +18,11 @@
 /*
  * FreeRTOS application integration for the Deluge firmware.
  *
- * Phase 4 architecture:
- * - Audio task at FreeRTOS priority 7 (highest) — DSP only, never touches SD
+ * Phase 6b architecture:
+ * - Audio task at FreeRTOS priority 7 (highest) — pure DSP, drains voice event queue
+ * - Sequencer task at priority 6 — tick advancement, event scheduling, MIDI/CV I/O, UI graphics
  * - Cluster loader task at priority 5 — loads sample clusters from SD card
- * - App task at FreeRTOS priority 3 — runs cooperative scheduler for UI/file ops
+ * - App task at FreeRTOS priority 3 — runs cooperative scheduler for file ops
  * - IRQ handler bridges to existing GIC dispatch via vApplicationFPUSafeIRQHandler
  */
 
@@ -30,7 +31,6 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
-#include "timers.h"
 
 /* --------------------------------------------------------------------------
  * IRQ bridge: FreeRTOS IRQ handler → existing Deluge GIC dispatch
@@ -64,9 +64,14 @@ static StackType_t sAudioTaskStack[4096];
 static StaticTask_t sClusterLoaderTCB;
 static StackType_t sClusterLoaderStack[2048];
 
+/* Sequencer task: tick advancement, event scheduling, MIDI/CV I/O, UI. 16KB stack. */
+static StaticTask_t sSequencerTaskTCB;
+static StackType_t sSequencerTaskStack[4096];
+
 /* Global handles for task management */
 TaskHandle_t clusterLoaderTaskHandle = nullptr;
 TaskHandle_t audioTaskHandle = nullptr;
+TaskHandle_t sequencerTaskHandle = nullptr;
 
 /* Idle task (required when configSUPPORT_STATIC_ALLOCATION=1). */
 static StaticTask_t sIdleTaskTCB;
@@ -77,17 +82,6 @@ extern "C" void vApplicationGetIdleTaskMemory(StaticTask_t** ppxIdleTaskTCBBuffe
 	*ppxIdleTaskTCBBuffer = &sIdleTaskTCB;
 	*ppxIdleTaskStackBuffer = sIdleTaskStack;
 	*pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
-}
-
-/* Timer daemon task (required when configUSE_TIMERS=1 and configSUPPORT_STATIC_ALLOCATION=1). */
-static StaticTask_t sTimerTaskTCB;
-static StackType_t sTimerTaskStack[configTIMER_TASK_STACK_DEPTH];
-
-extern "C" void vApplicationGetTimerTaskMemory(StaticTask_t** ppxTimerTaskTCBBuffer,
-                                               StackType_t** ppxTimerTaskStackBuffer, uint32_t* pulTimerTaskStackSize) {
-	*ppxTimerTaskTCBBuffer = &sTimerTaskTCB;
-	*ppxTimerTaskStackBuffer = sTimerTaskStack;
-	*pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
 
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskName) {
@@ -137,12 +131,15 @@ static void ssiTxDmaISR(uint32_t intSense) {
 	/* Toggle which half just completed */
 	ssiTxHalfComplete ^= 1;
 
-	/* Notify audio task from ISR */
-	if (audioTaskHandle != nullptr) {
-		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-		vTaskNotifyGiveFromISR(audioTaskHandle, &xHigherPriorityTaskWoken);
-		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	/* Notify the sequencer task from the DMA ISR.
+	 * The sequencer processes tick events and modifies voice state, then
+	 * notifies the audio task when it's safe to render. This ensures the
+	 * audio task never sees voice state mid-modification. */
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	if (sequencerTaskHandle != nullptr) {
+		vTaskNotifyGiveFromISR(sequencerTaskHandle, &xHigherPriorityTaskWoken);
 	}
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 /* Initialize the DMA interrupt for SSI TX.
@@ -167,12 +164,9 @@ static void audioTaskFunction(void* pvParameters) {
 	for (;;) {
 		/* Block until DMA half-buffer transfer completes.
 		 * The ISR fires every 128 samples (~2.9ms at 44.1kHz).
-		 *
-		 * The audio engine manages its own render window sizing internally
-		 * (tickSongFinalizeWindows adjusts numSamples to align with
-		 * sequencer tick boundaries). routine() checks the DMA buffer
-		 * position and renders however many samples are needed to keep
-		 * the buffer fed. The interrupt just ensures timely wakeup. */
+		 * The audio task is a pure DSP consumer: it drains the voice event
+		 * queue, renders all active voices/effects, and writes to the DMA buffer.
+		 * Tick logic and I/O are handled by the sequencer task. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		AudioEngine::routine();
 	}
@@ -197,10 +191,13 @@ static void appTaskFunction(void* pvParameters) {
 }
 
 /* --------------------------------------------------------------------------
- * Graphics timer: updates playhead and pad LEDs every 15ms via FreeRTOS
- * software timer. Runs in the timer daemon task at priority 6 (below audio,
- * above loader). Timer callbacks are non-preemptible within the daemon —
- * they run to completion, guaranteeing deterministic playhead updates.
+ * Sequencer task: owns tick advancement, event scheduling, MIDI/CV I/O,
+ * and UI graphics updates. Wakes on DMA ISR every ~2.9ms (same as audio).
+ * Runs at priority 6 — below audio (7), above cluster loader (5).
+ *
+ * Graphics updates run every ~5th wake-up (~14.5ms), replacing the former
+ * FreeRTOS timer daemon approach. The sequencer owns playback position,
+ * making it the natural place for playhead/LED updates.
  * -------------------------------------------------------------------------- */
 #include "gui/ui/ui.h"
 
@@ -208,17 +205,10 @@ extern "C" {
 int32_t uartGetTxBufferSpace(int32_t item);
 }
 
-static StaticTimer_t sGraphicsTimerBuffer;
-
 class Song;
 extern Song* currentSong;
 
-static void graphicsTimerCallback(TimerHandle_t xTimer) {
-	(void)xTimer;
-	/* Skip graphics updates when currentSong is null — this happens during
-	 * song loading after the old song is deleted but before the new one is
-	 * assigned. Many view graphicsRoutine() methods dereference currentSong
-	 * without null checks. */
+static void graphicsUpdate() {
 	if (currentSong == nullptr) {
 		return;
 	}
@@ -228,6 +218,43 @@ static void graphicsTimerCallback(TimerHandle_t xTimer) {
 		UI* ui = getCurrentUI();
 		if (ui != nullptr) {
 			ui->graphicsRoutine();
+		}
+	}
+}
+
+/* Placeholder for sequencer tick logic — will be implemented in Step 4.
+ * For now, this is a no-op so the task structure compiles and runs. */
+static void sequencerRoutine() {
+	/* TODO: Phase 6b Step 4 — move tick logic from audio engine here */
+}
+
+static void sequencerTaskFunction(void* pvParameters) {
+	(void)pvParameters;
+	uint8_t graphicsCounter = 0;
+
+	for (;;) {
+		/* Block until DMA half-buffer transfer completes (~2.9ms).
+		 * The DMA ISR wakes the sequencer, which processes tick events
+		 * and modifies voice state. After finishing, it notifies the
+		 * audio task to render. This guarantees the audio task never
+		 * sees voices mid-modification. */
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+		sequencerRoutine();
+
+		/* Signal the audio task that voice state is consistent and
+		 * ready to render. The audio task (priority 7) will preempt
+		 * us immediately. */
+		if (audioTaskHandle != nullptr) {
+			xTaskNotifyGive(audioTaskHandle);
+		}
+
+		/* Graphics update every ~5th wake-up (~14.5ms).
+		 * Runs after the audio task preempts and finishes rendering,
+		 * so we don't delay audio. */
+		if (++graphicsCounter >= 5) {
+			graphicsCounter = 0;
+			graphicsUpdate();
 		}
 	}
 }
@@ -245,17 +272,15 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	clusterLoaderTaskHandle = xTaskCreateStatic(clusterLoaderTaskFunction, "ClusterLoader", 2048, NULL, 5,
 	                                            sClusterLoaderStack, &sClusterLoaderTCB);
 
-	/* Audio task at highest priority — preempts everything */
+	/* Sequencer task at priority 6 — tick advancement, events, MIDI/CV I/O, UI graphics */
+	sequencerTaskHandle =
+	    xTaskCreateStatic(sequencerTaskFunction, "Sequencer", 4096, NULL, configMAX_PRIORITIES - 2, /* Priority 6 */
+	                      sSequencerTaskStack, &sSequencerTaskTCB);
+
+	/* Audio task at highest priority — pure DSP, preempts everything */
 	audioTaskHandle =
 	    xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */
 	                      sAudioTaskStack, &sAudioTaskTCB);
-
-	/* Graphics timer: 15ms auto-reload for deterministic playhead/LED updates.
-	 * The timer daemon runs at priority 6 and timer callbacks execute
-	 * non-preemptibly within the daemon, ensuring consistent display timing. */
-	TimerHandle_t graphicsTimer = xTimerCreateStatic("GfxTimer", pdMS_TO_TICKS(15), pdTRUE, /* auto-reload */
-	                                                 NULL, graphicsTimerCallback, &sGraphicsTimerBuffer);
-	xTimerStart(graphicsTimer, 0);
 
 	/* Start the FreeRTOS scheduler. This never returns. */
 	vTaskStartScheduler();
