@@ -30,6 +30,7 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
+#include "timers.h"
 
 /* --------------------------------------------------------------------------
  * IRQ bridge: FreeRTOS IRQ handler → existing Deluge GIC dispatch
@@ -77,6 +78,17 @@ extern "C" void vApplicationGetIdleTaskMemory(StaticTask_t** ppxIdleTaskTCBBuffe
 	*pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
 }
 
+/* Timer daemon task (required when configUSE_TIMERS=1 and configSUPPORT_STATIC_ALLOCATION=1). */
+static StaticTask_t sTimerTaskTCB;
+static StackType_t sTimerTaskStack[configTIMER_TASK_STACK_DEPTH];
+
+extern "C" void vApplicationGetTimerTaskMemory(StaticTask_t** ppxTimerTaskTCBBuffer,
+                                               StackType_t** ppxTimerTaskStackBuffer, uint32_t* pulTimerTaskStackSize) {
+	*ppxTimerTaskTCBBuffer = &sTimerTaskTCB;
+	*ppxTimerTaskStackBuffer = sTimerTaskStack;
+	*pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
+}
+
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskName) {
 	(void)xTask;
 	(void)pcTaskName;
@@ -122,6 +134,32 @@ static void appTaskFunction(void* pvParameters) {
 }
 
 /* --------------------------------------------------------------------------
+ * Graphics timer: updates playhead and pad LEDs every 15ms via FreeRTOS
+ * software timer. Runs in the timer daemon task at priority 6 (below audio,
+ * above loader). Timer callbacks are non-preemptible within the daemon —
+ * they run to completion, guaranteeing deterministic playhead updates.
+ * -------------------------------------------------------------------------- */
+#include "gui/ui/ui.h"
+
+extern "C" {
+int32_t uartGetTxBufferSpace(int32_t item);
+}
+
+static StaticTimer_t sGraphicsTimerBuffer;
+
+static void graphicsTimerCallback(TimerHandle_t xTimer) {
+	(void)xTimer;
+	/* Only update if UART has space — matches existing GRAPHICS_ROUTINE behavior.
+	 * UART_ITEM_PIC_PADS = 1, kNumBytesInColUpdateMessage = 49 */
+	if (uartGetTxBufferSpace(1) > 49) {
+		UI* ui = getCurrentUI();
+		if (ui != nullptr) {
+			ui->graphicsRoutine();
+		}
+	}
+}
+
+/* --------------------------------------------------------------------------
  * Entry point: create tasks and start the FreeRTOS scheduler
  * -------------------------------------------------------------------------- */
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
@@ -137,6 +175,13 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	/* Audio task at highest priority — preempts everything */
 	xTaskCreateStatic(audioTaskFunction, "Audio", 4096, NULL, configMAX_PRIORITIES - 1, /* Priority 7 */
 	                  sAudioTaskStack, &sAudioTaskTCB);
+
+	/* Graphics timer: 15ms auto-reload for deterministic playhead/LED updates.
+	 * The timer daemon runs at priority 6 and timer callbacks execute
+	 * non-preemptibly within the daemon, ensuring consistent display timing. */
+	TimerHandle_t graphicsTimer = xTimerCreateStatic("GfxTimer", pdMS_TO_TICKS(15), pdTRUE, /* auto-reload */
+	                                                 NULL, graphicsTimerCallback, &sGraphicsTimerBuffer);
+	xTimerStart(graphicsTimer, 0);
 
 	/* Start the FreeRTOS scheduler. This never returns. */
 	vTaskStartScheduler();

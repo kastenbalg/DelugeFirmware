@@ -1097,6 +1097,13 @@ enum class UIStage { oled, readEnc, readButtons };
 /// this function is used as a busy wait loop for long SD reads, and while swapping songs
 extern "C" void routineForSD(void) {
 
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, audio runs in its own preemptive task and graphics
+	 * update via a FreeRTOS timer. No need to pump them from inside SD
+	 * operations. This also allows vTaskSuspendAll to be used safely
+	 * around SDHI operations without mutex conflicts. */
+	return;
+#else
 	if (intc_func_active != 0) {
 		return;
 	}
@@ -1109,10 +1116,7 @@ extern "C" void routineForSD(void) {
 	sdRoutineLock = true;
 	static UIStage step = UIStage::oled;
 	AudioEngine::logAction("from routineForSD()");
-#ifndef USE_FREERTOS
-	// Under FreeRTOS, audio runs in its own preemptive task — don't call it from here
 	AudioEngine::runRoutine();
-#endif
 	switch (step) {
 	case UIStage::oled:
 		if (display->haveOLED()) {
@@ -1133,6 +1137,7 @@ extern "C" void routineForSD(void) {
 	}
 	sdRoutineLock = false;
 	rtos_mutex_unlock(sdRoutineMutex);
+#endif
 }
 
 extern "C" void sdCardInserted(void) {

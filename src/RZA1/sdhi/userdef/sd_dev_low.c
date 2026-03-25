@@ -1228,16 +1228,10 @@ static int sddev_disable_dma_1(void)
 ******************************************************************************/
 int sddev_loc_cpu(int sd_port)
 {
-#ifdef USE_FREERTOS
-    /* Prevent FreeRTOS context switches during SDHI driver critical sections.
-     * The SDHI DMA completion interrupt (priority 10) is above
-     * configMAX_API_CALL_INTERRUPT_PRIORITY so it still fires.
-     * Guard: only suspend if the scheduler is running (not during boot). */
-    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
-        vTaskSuspendAll();
-    }
-#endif
-
+    /* Under FreeRTOS, the entire sd_read_sect/sd_write_sect call is wrapped
+     * in vTaskSuspendAll by diskio.c. No additional suspension needed here.
+     * The original code had this #if 0'd out for the same reason — the
+     * cooperative scheduler never preempted mid-operation. */
     return SD_OK;
 }
 
@@ -1250,11 +1244,7 @@ int sddev_loc_cpu(int sd_port)
 ******************************************************************************/
 int sddev_unl_cpu(int sd_port)
 {
-#ifdef USE_FREERTOS
-    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
-        xTaskResumeAll();
-    }
-#endif
+    /* See sddev_loc_cpu — suspension handled at diskio.c level. */
     return SD_OK;
 }
 

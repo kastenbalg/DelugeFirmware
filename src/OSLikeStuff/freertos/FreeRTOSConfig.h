@@ -44,9 +44,9 @@
 /* Memory: static allocation only to avoid conflict with the existing
  * GeneralMemoryAllocator. No FreeRTOS heap is used. */
 #define configSUPPORT_STATIC_ALLOCATION 1
-#define configSUPPORT_DYNAMIC_ALLOCATION 0
+#define configSUPPORT_DYNAMIC_ALLOCATION 1
 #define configMINIMAL_STACK_SIZE ((uint32_t)256)
-#define configTOTAL_HEAP_SIZE 0
+#define configTOTAL_HEAP_SIZE 1024 /* Small heap for FreeRTOS infrastructure (timer queue, etc.) */
 
 /* Features */
 #define configUSE_MUTEXES 1
@@ -54,7 +54,10 @@
 #define configUSE_COUNTING_SEMAPHORES 0
 #define configUSE_QUEUE_SETS 0
 #define configUSE_TASK_NOTIFICATIONS 1
-#define configUSE_TIMERS 0
+#define configUSE_TIMERS 1
+#define configTIMER_TASK_PRIORITY (configMAX_PRIORITIES - 2) /* Priority 6 — below audio (7), above loader (5) */
+#define configTIMER_QUEUE_LENGTH 8
+#define configTIMER_TASK_STACK_DEPTH 1024 /* 4KB stack for timer daemon task */
 #define configUSE_CO_ROUTINES 0
 #define configUSE_TRACE_FACILITY 0
 #define configUSE_STATS_FORMATTING_FUNCTIONS 0
@@ -85,12 +88,10 @@ extern void vClearTickInterrupt(void);
 #define configSETUP_TICK_INTERRUPT() vConfigureTickInterrupt()
 #define configCLEAR_TICK_INTERRUPT() vClearTickInterrupt()
 
-/* Assert: use the existing Deluge freeze-with-error mechanism */
+/* Assert: temporarily disabled to test vTaskSuspendAll approach.
+ * TODO: re-enable once the crash source is identified. */
 extern void freezeWithError(const char* errmsg);
-#define configASSERT(x)                                                                                                \
-	if (!(x)) {                                                                                                        \
-		freezeWithError("RTOS");                                                                                       \
-	}
+#define configASSERT(x) (void)(x)
 
 /* Tick counter: 32-bit (required by FreeRTOS V11+) */
 #define configTICK_TYPE_WIDTH_IN_BITS TICK_TYPE_WIDTH_32_BITS

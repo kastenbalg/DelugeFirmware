@@ -219,25 +219,23 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
     // uint16_t startTime = MTU2.TCNT_0;
 
 #ifdef USE_FREERTOS
-    /* Read one sector at a time with priority boost, releasing between
-     * each sector so the audio task can run. Each sd_read_sect of 1 sector
-     * takes ~150-250us, well within the audio DMA buffer margin.
-     * The sdCardMutex is held for the entire sequence to prevent other
-     * tasks from interleaving their own SD operations. */
+    /* Read one sector at a time with vTaskSuspendAll per sector.
+     * The SDHI driver cannot tolerate ANY preemption during sd_read_sect
+     * (it accesses SDHI registers and sends card commands outside its
+     * own sddev_loc_cpu sections). Each single-sector read takes ~250us.
+     * sddev_loc_cpu/sddev_unl_cpu are no-ops — we handle suspension here.
+     * Between sectors, resume the scheduler so audio and timer can run. */
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
     {
-        TaskHandle_t thisTask     = xTaskGetCurrentTaskHandle();
-        UBaseType_t savedPriority = uxTaskPriorityGet(thisTask);
-
         rtos_mutex_lock(sdCardMutex);
         currentlyAccessingCard = 1;
         err                    = 0;
 
         for (UINT i = 0; i < count; i++)
         {
-            vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
+            vTaskSuspendAll();
             err = sd_read_sect(SD_PORT, buff + (i * 512), sector + i, 1);
-            vTaskPrioritySet(thisTask, savedPriority);
+            xTaskResumeAll();
 
             if (err != 0)
             {
@@ -294,18 +292,15 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
 #ifdef USE_FREERTOS
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
     {
-        TaskHandle_t thisTask     = xTaskGetCurrentTaskHandle();
-        UBaseType_t savedPriority = uxTaskPriorityGet(thisTask);
-
         rtos_mutex_lock(sdCardMutex);
         currentlyAccessingCard = 1;
         err                    = 0;
 
         for (UINT i = 0; i < count; i++)
         {
-            vTaskPrioritySet(thisTask, configMAX_PRIORITIES - 1);
-            err = sd_write_sect(SD_PORT, buff + (i * 512), sector + i, 1, 0x0001u);
-            vTaskPrioritySet(thisTask, savedPriority);
+            vTaskSuspendAll();
+            err = sd_write_sect(SD_PORT, (const unsigned char*)buff + (i * 512), sector + i, 1, 0x0001u);
+            xTaskResumeAll();
 
             if (err != 0)
             {

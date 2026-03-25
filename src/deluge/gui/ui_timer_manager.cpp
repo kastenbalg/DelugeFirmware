@@ -213,11 +213,18 @@ void UITimerManager::routine() {
 					break;
 
 				case TimerName::GRAPHICS_ROUTINE:
+#ifdef USE_FREERTOS
+					/* Under FreeRTOS, graphicsRoutine() is called by a dedicated
+					 * software timer at priority 6. Don't call it from the cooperative
+					 * scheduler too — just let the timer handle reschedule itself. */
+					break;
+#else
 					if (uartGetTxBufferSpace(UART_ITEM_PIC_PADS) > kNumBytesInColUpdateMessage) {
 						getCurrentUI()->graphicsRoutine();
 					}
 					setTimer(TimerName::GRAPHICS_ROUTINE, 15);
 					break;
+#endif
 
 				case TimerName::OLED_LOW_LEVEL:
 					if (deluge::hid::display::have_oled_screen) {
