@@ -264,19 +264,37 @@ static void graphicsUpdate() {
 
 static constexpr size_t kHalfBufferSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 
+/* Tracks where the sequencer last finished processing ticks.
+ * Used to cap catch-up work to 2 buffers and skip (drop) anything
+ * further behind — prevents death spiral under overload. */
+static uint32_t lastSequencerProcessedTime = 0;
+
 static void sequencerRoutine() {
 	/* Poll MIDI/analog clock input */
 	playbackHandler.routine();
 
 	if (!playbackHandler.isEitherClockActive()) {
+		lastSequencerProcessedTime = AudioEngine::audioSampleTimer;
 		playbackHandler.publishTempoState();
 		return;
 	}
 
-	/* Process all ticks that fall within this half-buffer period.
-	 * audioSampleTimer is the start of the buffer the audio task just rendered
-	 * (audio runs before us). We process ticks for the *next* buffer. */
-	uint32_t bufferEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
+	/* Calculate how far ahead to process. Normally one buffer ahead of
+	 * audioSampleTimer. If the sequencer fell behind, allow up to two
+	 * buffers of catch-up. Anything beyond two buffers is dropped —
+	 * those ticks are too far in the past to process meaningfully.
+	 * This prevents death spirals where catch-up work causes more overrun. */
+	uint32_t targetEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
+	uint32_t maxEnd = lastSequencerProcessedTime + (2 * kHalfBufferSamples);
+
+	/* If we're more than 2 buffers behind, skip ahead to current time.
+	 * The dropped ticks (missed notes/arp steps) are lost. */
+	if ((int32_t)(targetEnd - maxEnd) > 0) {
+		lastSequencerProcessedTime = AudioEngine::audioSampleTimer;
+		maxEnd = lastSequencerProcessedTime + (2 * kHalfBufferSamples);
+	}
+
+	uint32_t bufferEnd = ((int32_t)(targetEnd - maxEnd) <= 0) ? targetEnd : maxEnd;
 
 	for (;;) {
 		/* No safety counter — the original tickSongFinalizeWindows had none.
@@ -328,6 +346,9 @@ static void sequencerRoutine() {
 			}
 		}
 	}
+
+	/* Record where we finished so the cap works next cycle */
+	lastSequencerProcessedTime = bufferEnd;
 
 	playbackHandler.publishTempoState();
 }

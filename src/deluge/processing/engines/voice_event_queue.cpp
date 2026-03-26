@@ -72,10 +72,7 @@ static ModelStackWithSoundFlags* buildModelStack(char* memory, Sound* sound, Ins
 	ModelStack* ms = (ModelStack*)memory;
 	ms->song = currentSong;
 
-	ParamManager* pm = sound->getParamManager(currentSong);
-	if (pm == nullptr && clip != nullptr) {
-		pm = &clip->paramManager;
-	}
+	ParamManager* pm = (clip != nullptr) ? &clip->paramManager : nullptr;
 
 	auto* ms3 = ms->addTimelineCounter(clip)->addOtherTwoThingsButNoNoteRow(sound, pm);
 	return ms3->addSoundFlags();
@@ -103,7 +100,7 @@ static void processVoiceEvent(const VoiceEvent& event) {
 		/* NOTE_OFF doesn't carry a clip pointer — use the Sound's activeClip */
 		InstrumentClip* clip = nullptr;
 		if (event.sound != nullptr) {
-			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->activeClip);
+			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->getActiveClip());
 		}
 		ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, clip);
 		if (msf != nullptr) {
@@ -113,20 +110,18 @@ static void processVoiceEvent(const VoiceEvent& event) {
 	}
 
 	case VoiceEventType::LEGATO: {
-		/* Find the matching voice on this Sound and call changeNoteCode */
+		/* Legato is handled by noteOnPostArpeggiator — when polyphony mode is
+		 * LEGATO, it finds the existing voice and calls changeNoteCode internally.
+		 * We just route through NOTE_ON with the legato note codes. */
 		if (event.sound != nullptr) {
 			char modelStackMemory[256];
 			InstrumentClip* clip = nullptr;
-			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->activeClip);
+			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->getActiveClip());
 			ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, clip);
 			if (msf != nullptr) {
-				for (auto& voice : event.sound->voices_) {
-					if (voice->envelopes[0].state < EnvelopeStage::RELEASE) {
-						voice->changeNoteCode(msf, event.legato.noteCodePreArp, event.legato.noteCodePostArp,
-						                      event.legato.fromMIDIChannel, event.legato.mpeValues);
-						break;
-					}
-				}
+				event.sound->noteOnPostArpeggiator(msf, event.legato.noteCodePreArp, event.legato.noteCodePostArp,
+				                                   0, /* velocity — not used for legato transition */
+				                                   event.legato.mpeValues, 0, 0, 0, event.legato.fromMIDIChannel);
 			}
 		}
 		break;
