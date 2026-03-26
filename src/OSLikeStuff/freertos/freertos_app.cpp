@@ -246,6 +246,7 @@ static void graphicsUpdate() {
 #include "definitions.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
+#include "storage/cluster/cluster_prefetch.h"
 
 #define TICK_TYPE_SWUNG 1
 #define TICK_TYPE_TIMER 2
@@ -342,6 +343,12 @@ static void sequencerTaskFunction(void* pvParameters) {
 		AudioEngine::cleanupDeletedVoices();
 
 		sequencerRoutine();
+
+		/* Prefetch sample clusters for notes that will fire soon.
+		 * This runs AFTER tick processing (which may have started new notes)
+		 * but BEFORE the audio task's next render. The cluster loader (pri 5)
+		 * runs after we block, giving it time to load before audio needs them. */
+		prefetchUpcomingSampleClusters();
 
 		/* Graphics update every ~5th wake-up (~14.5ms) */
 		if (++graphicsCounter >= 5) {
