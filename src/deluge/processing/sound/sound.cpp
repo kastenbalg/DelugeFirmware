@@ -50,6 +50,7 @@
 #include "modulation/patch/patcher.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "processing/sound/sound_instrument.h"
 #include "storage/audio/audio_file_manager.h"
 #include "storage/flash_storage.h"
@@ -1592,6 +1593,17 @@ void Sound::noteOff(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBase* 
 void Sound::noteOnPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t noteCodePreArp, int32_t noteCodePostArp,
                                   int32_t velocity, int16_t const* mpeValues, uint32_t sampleSyncLength,
                                   int32_t ticksLate, uint32_t samplesLate, int32_t fromMIDIChannel) {
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, only the audio task may touch voices. If we're called
+	 * from the sequencer, app, or MIDI task, enqueue the event and return.
+	 * The audio task will process it on its next render cycle. */
+	if (!isAudioTask()) {
+		voiceEventNoteOn(this, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()), noteCodePreArp,
+		                 noteCodePostArp, velocity, mpeValues, sampleSyncLength, ticksLate, samplesLate,
+		                 fromMIDIChannel);
+		return;
+	}
+#endif
 	const ActiveVoice* voiceToReuse = nullptr;
 	const ActiveVoice* voiceForLegato = nullptr;
 
@@ -1766,6 +1778,14 @@ void Sound::allNotesOff(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBa
 
 // noteCode = ALL_NOTES_OFF (default) means stop *any* voice, regardless of noteCode
 void Sound::noteOffPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t noteCode) {
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, only the audio task may touch voices. If we're called
+	 * from the sequencer, app, or MIDI task, enqueue the event and return. */
+	if (!isAudioTask()) {
+		voiceEventNoteOff(this, noteCode, 0, true);
+		return;
+	}
+#endif
 	// Send midi note offs out for specific notes,
 	// but only if the type of sound allows note tails (if not, note off was already sent right after its note on)
 	if (outputMidiChannel != MIDI_CHANNEL_NONE && allowNoteTails(modelStack, true)) {
@@ -2432,7 +2452,11 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 
 	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStack->addSoundFlags();
 
-	// Arpeggiator
+#ifndef USE_FREERTOS
+	// Arpeggiator — under cooperative scheduler, runs inline during render.
+	// Under FreeRTOS, arp processing is handled entirely by the sequencer task
+	// via doTickForwardForArp() and advanceArpPhase(), which enqueue voice
+	// events through the voice event queue.
 
 	UnpatchedParamSet* unpatchedParams = paramManager->getUnpatchedParamSet();
 
@@ -2471,6 +2495,7 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 		invertReversed = false;
 	}
 	process_postarp_notes(modelStackWithSoundFlags, arpSettings, instruction);
+#endif
 
 	// Setup delay
 	Delay::State delayWorkingState{};

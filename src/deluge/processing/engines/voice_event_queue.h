@@ -145,6 +145,11 @@ static constexpr size_t kVoiceEventQueueCapacity = 256;
 /* Initialize the voice event queue. Must be called before the scheduler starts. */
 void voiceEventQueueInit();
 
+/* Returns true if the calling task is the audio task (the voice owner).
+ * Used by noteOnPostArpeggiator/noteOffPostArpeggiator to decide whether
+ * to execute directly (in audio task) or enqueue (from any other task). */
+bool isAudioTask();
+
 /* Enqueue a voice event. Called from any task (sequencer, app, MIDI handler).
  * Returns true if the event was enqueued, false if the queue is full.
  * Non-blocking — if the queue is full, the event is dropped. */

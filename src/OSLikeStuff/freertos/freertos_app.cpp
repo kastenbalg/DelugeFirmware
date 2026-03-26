@@ -112,6 +112,7 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskNa
 #include "definitions.h"
 #include "drivers/dmac/dmac.h"
 #include "drivers/ssi/ssi.h"
+#include "processing/engines/voice_event_queue.h"
 
 namespace AudioEngine {
 void routine();
@@ -251,9 +252,11 @@ static void graphicsUpdate() {
  * on its next wake-up (one buffer of latency).
  * -------------------------------------------------------------------------- */
 #include "definitions.h"
+#include "model/song/song.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/engines/voice_event_queue.h"
+#include "processing/sound/sound_instrument.h"
 #include "storage/cluster/cluster_prefetch.h"
 
 #define TICK_TYPE_SWUNG 1
@@ -329,6 +332,26 @@ static void sequencerRoutine() {
 	playbackHandler.publishTempoState();
 }
 
+/* Advance the sample-based arp phase for all active SoundInstruments.
+ * This replaces the arp processing that was inside Sound::render().
+ * Called every sequencer cycle regardless of tick activity — the arp
+ * phase accumulator must advance continuously to track gate timing. */
+static void advanceAllArpPhases() {
+	if (currentSong == nullptr) {
+		return;
+	}
+
+	char modelStackMemory[MODEL_STACK_MAX_SIZE];
+	ModelStack* modelStack = setupModelStackWithSong(modelStackMemory, currentSong);
+
+	for (Output* output = currentSong->firstOutput; output != nullptr; output = output->next) {
+		if (output->type == OutputType::SYNTH) {
+			SoundInstrument* sound = static_cast<SoundInstrument*>(output);
+			sound->advanceArpPhase(modelStack, kHalfBufferSamples);
+		}
+	}
+}
+
 extern volatile uint32_t allocMutexContentionCount;
 
 static void sequencerTaskFunction(void* pvParameters) {
@@ -351,6 +374,11 @@ static void sequencerTaskFunction(void* pvParameters) {
 		AudioEngine::cleanupDeletedVoices();
 
 		sequencerRoutine();
+
+		/* Advance sample-based arp phase for all active sounds.
+		 * Must run every cycle (not just on ticks) because the arp's
+		 * phase accumulator tracks gate timing continuously. */
+		advanceAllArpPhases();
 
 		/* Prefetch sample clusters for notes that will fire soon.
 		 * This runs AFTER tick processing (which may have started new notes)

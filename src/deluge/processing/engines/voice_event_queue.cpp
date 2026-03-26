@@ -18,13 +18,28 @@
 #ifdef USE_FREERTOS
 
 #include "processing/engines/voice_event_queue.h"
+#include "model/clip/instrument_clip.h"
+#include "model/model_stack.h"
+#include "model/song/song.h"
+#include "model/voice/voice.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/sound/sound.h"
+#include "processing/sound/sound_instrument.h"
+#include "task.h"
+
+extern Song* currentSong;
 
 /* Static storage for the FreeRTOS queue (no dynamic allocation). */
 static StaticQueue_t sVoiceEventQueueStorage;
 static uint8_t sVoiceEventQueueBuffer[kVoiceEventQueueCapacity * sizeof(VoiceEvent)];
 static QueueHandle_t sVoiceEventQueue = nullptr;
+
+/* Audio task handle — set by startFreeRTOS, used by isAudioTask(). */
+extern TaskHandle_t audioTaskHandle;
+
+bool isAudioTask() {
+	return xTaskGetCurrentTaskHandle() == audioTaskHandle;
+}
 
 void voiceEventQueueInit() {
 	sVoiceEventQueue = xQueueCreateStatic(kVoiceEventQueueCapacity, sizeof(VoiceEvent), sVoiceEventQueueBuffer,
@@ -47,22 +62,75 @@ bool voiceEventEnqueue(const VoiceEvent& event) {
  * TODO: Implement each event type. Currently stubs that will be filled
  * in as we modify each caller to use the queue instead of direct calls.
  */
+/* Build a ModelStackWithSoundFlags from a Sound and InstrumentClip.
+ * Used to reconstruct the ModelStack that noteOnPostArpeggiator and
+ * noteOffPostArpeggiator expect, from the data stored in voice events. */
+static ModelStackWithSoundFlags* buildModelStack(char* memory, Sound* sound, InstrumentClip* clip) {
+	if (currentSong == nullptr || sound == nullptr) {
+		return nullptr;
+	}
+	ModelStack* ms = (ModelStack*)memory;
+	ms->song = currentSong;
+
+	ParamManager* pm = sound->getParamManager(currentSong);
+	if (pm == nullptr && clip != nullptr) {
+		pm = &clip->paramManager;
+	}
+
+	auto* ms3 = ms->addTimelineCounter(clip)->addOtherTwoThingsButNoNoteRow(sound, pm);
+	return ms3->addSoundFlags();
+}
+
 static void processVoiceEvent(const VoiceEvent& event) {
 	switch (event.type) {
-	case VoiceEventType::NOTE_ON:
-		/* TODO: Call Sound::noteOnPostArpeggiator from here.
-		 * Requires reconstructing ModelStackWithSoundFlags from
-		 * event.sound and event.noteOn.clip. */
+	case VoiceEventType::NOTE_ON: {
+		/* Reconstruct ModelStack and call noteOnPostArpeggiator.
+		 * This runs in the audio task — isAudioTask() returns true,
+		 * so noteOnPostArpeggiator executes directly instead of re-enqueueing. */
+		char modelStackMemory[256]; /* ModelStack is small, stack-allocated */
+		ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, event.noteOn.clip);
+		if (msf != nullptr) {
+			event.sound->noteOnPostArpeggiator(msf, event.noteOn.noteCodePreArp, event.noteOn.noteCodePostArp,
+			                                   event.noteOn.velocity, event.noteOn.mpeValues,
+			                                   event.noteOn.sampleSyncLength, event.noteOn.ticksLate,
+			                                   event.noteOn.samplesLate, event.noteOn.fromMIDIChannel);
+		}
 		break;
+	}
 
-	case VoiceEventType::NOTE_OFF:
-		/* TODO: Call Sound::noteOffPostArpeggiator or find the
-		 * matching voice and call voice->noteOff(). */
+	case VoiceEventType::NOTE_OFF: {
+		char modelStackMemory[256];
+		/* NOTE_OFF doesn't carry a clip pointer — use the Sound's activeClip */
+		InstrumentClip* clip = nullptr;
+		if (event.sound != nullptr) {
+			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->activeClip);
+		}
+		ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, clip);
+		if (msf != nullptr) {
+			event.sound->noteOffPostArpeggiator(msf, event.noteOff.noteCodePostArp);
+		}
 		break;
+	}
 
-	case VoiceEventType::LEGATO:
-		/* TODO: Find the matching voice and call voice->changeNoteCode(). */
+	case VoiceEventType::LEGATO: {
+		/* Find the matching voice on this Sound and call changeNoteCode */
+		if (event.sound != nullptr) {
+			char modelStackMemory[256];
+			InstrumentClip* clip = nullptr;
+			clip = static_cast<InstrumentClip*>(static_cast<SoundInstrument*>(event.sound)->activeClip);
+			ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, clip);
+			if (msf != nullptr) {
+				for (auto& voice : event.sound->voices_) {
+					if (voice->envelopes[0].state < EnvelopeStage::RELEASE) {
+						voice->changeNoteCode(msf, event.legato.noteCodePreArp, event.legato.noteCodePostArp,
+						                      event.legato.fromMIDIChannel, event.legato.mpeValues);
+						break;
+					}
+				}
+			}
+		}
 		break;
+	}
 
 	case VoiceEventType::KILL_SOUND:
 		if (event.sound != nullptr) {
