@@ -39,7 +39,7 @@ public:
 	/// @brief Gets the global pool for a given object
 	/// @returns A reference to the pool
 	static constexpr ObjectPool& get() {
-		static thread_local ObjectPool instance;
+		static ObjectPool instance;
 		return instance;
 	}
 

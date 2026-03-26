@@ -4958,6 +4958,14 @@ void Sound::cleanupDeletedVoices() {
 }
 
 void Sound::killAllVoices() {
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, only the audio task may touch voices.
+	 * If called from another task, enqueue a KILL_SOUND event. */
+	if (!isAudioTask()) {
+		voiceEventKillSound(this);
+		return;
+	}
+#endif
 	// Reset invertReversed flag so all voices get its reverse settings back to normal
 	invertReversed = false;
 

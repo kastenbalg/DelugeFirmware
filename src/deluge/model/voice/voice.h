@@ -20,6 +20,7 @@
 #include "definitions_cxx.hpp"
 #include "dsp/filter/filter_set.h"
 #include "model/voice/voice_sample_playback_guide.h"
+#include "model/voice/voice_state.h"
 #include "model/voice/voice_unison_part.h"
 #include "modulation/envelope.h"
 #include "modulation/lfo.h"
@@ -46,6 +47,54 @@ public:
 	std::array<VoiceSamplePlaybackGuide, kNumSources> guides;
 
 	Sound& sound; // This is a reference to the Sound that owns this Voice
+
+#ifdef USE_FREERTOS
+	/// Current lifecycle state. Only the audio task writes this.
+	/// Other tasks may read it atomically to check if a voice is active.
+	VoiceState voiceState{VoiceState::FREE};
+
+	/// Pointer to the Sound that owns this voice slot (may differ from sound&
+	/// if the slot is reused across different Sounds). Set during NOTE_ON processing.
+	Sound* ownerSound{nullptr};
+
+	/// Transition to ACTIVE state. Called by audio task when processing NOTE_ON.
+	void transitionToActive(Sound* owner) {
+		voiceState = VoiceState::ACTIVE;
+		ownerSound = owner;
+	}
+
+	/// Transition to RELEASING state. Called by audio task when processing NOTE_OFF.
+	void transitionToReleasing() {
+		if (voiceState == VoiceState::ACTIVE) {
+			voiceState = VoiceState::RELEASING;
+		}
+	}
+
+	/// Transition to FAST_RELEASING state. Called by audio task for voice stealing.
+	void transitionToFastReleasing() {
+		if (voiceState == VoiceState::ACTIVE || voiceState == VoiceState::RELEASING) {
+			voiceState = VoiceState::FAST_RELEASING;
+		}
+	}
+
+	/// Transition to CLEANUP state. Called by audio task when envelope reaches zero.
+	void transitionToCleanup() { voiceState = VoiceState::CLEANUP; }
+
+	/// Transition to FREE state. Called by audio task after resource cleanup.
+	void transitionToFree() {
+		voiceState = VoiceState::FREE;
+		ownerSound = nullptr;
+	}
+
+	/// Check if this voice slot is available for allocation.
+	bool isFree() const { return voiceState == VoiceState::FREE; }
+
+	/// Check if this voice is sounding (ACTIVE, RELEASING, or FAST_RELEASING).
+	bool isSounding() const {
+		return voiceState == VoiceState::ACTIVE || voiceState == VoiceState::RELEASING
+		       || voiceState == VoiceState::FAST_RELEASING;
+	}
+#endif
 
 	///
 	/// This is just for the *local* params, specific to this Voice only
@@ -127,12 +176,13 @@ public:
 	bool forceNormalRelease();
 
 	bool speedUpRelease();
+#ifdef USE_FREERTOS
+	bool shouldBeDeleted() { return voiceState == VoiceState::CLEANUP; }
+	void markForDeletion() { transitionToCleanup(); }
+#else
 	bool shouldBeDeleted() { return delete_this_voice_; }
-
-	/// Mark for deletion without freeing resources. Under FreeRTOS, the audio
-	/// task calls this instead of setAsUnassigned — the sequencer task handles
-	/// actual resource cleanup to prevent double-free races.
 	void markForDeletion() { delete_this_voice_ = true; }
+#endif
 
 	// This compares based on the priority of two voices
 	[[nodiscard]] std::strong_ordering operator<=>(const Voice& other) const {

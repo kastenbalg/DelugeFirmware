@@ -264,37 +264,21 @@ static void graphicsUpdate() {
 
 static constexpr size_t kHalfBufferSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 
-/* Tracks where the sequencer last finished processing ticks.
- * Used to cap catch-up work to 2 buffers and skip (drop) anything
- * further behind — prevents death spiral under overload. */
-static uint32_t lastSequencerProcessedTime = 0;
-
 static void sequencerRoutine() {
 	/* Poll MIDI/analog clock input */
 	playbackHandler.routine();
 
 	if (!playbackHandler.isEitherClockActive()) {
-		lastSequencerProcessedTime = AudioEngine::audioSampleTimer;
 		playbackHandler.publishTempoState();
 		return;
 	}
 
-	/* Calculate how far ahead to process. Normally one buffer ahead of
-	 * audioSampleTimer. If the sequencer fell behind, allow up to two
-	 * buffers of catch-up. Anything beyond two buffers is dropped —
-	 * those ticks are too far in the past to process meaningfully.
-	 * This prevents death spirals where catch-up work causes more overrun. */
-	uint32_t targetEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
-	uint32_t maxEnd = lastSequencerProcessedTime + (2 * kHalfBufferSamples);
-
-	/* If we're more than 2 buffers behind, skip ahead to current time.
-	 * The dropped ticks (missed notes/arp steps) are lost. */
-	if ((int32_t)(targetEnd - maxEnd) > 0) {
-		lastSequencerProcessedTime = AudioEngine::audioSampleTimer;
-		maxEnd = lastSequencerProcessedTime + (2 * kHalfBufferSamples);
-	}
-
-	uint32_t bufferEnd = ((int32_t)(targetEnd - maxEnd) <= 0) ? targetEnd : maxEnd;
+	/* Process all ticks up to one half-buffer ahead of audioSampleTimer.
+	 * No tick dropping — all ticks are processed. The larger buffer (512 samples,
+	 * 256-sample halves, 5.8ms per cycle) gives the sequencer enough time
+	 * to process all ticks without overrunning. Performance tuning (buffer size,
+	 * tick dropping for overload) can be revisited when the port is more complete. */
+	uint32_t bufferEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
 
 	for (;;) {
 		/* No safety counter — the original tickSongFinalizeWindows had none.
@@ -347,9 +331,6 @@ static void sequencerRoutine() {
 		}
 	}
 
-	/* Record where we finished so the cap works next cycle */
-	lastSequencerProcessedTime = bufferEnd;
-
 	playbackHandler.publishTempoState();
 }
 
@@ -389,10 +370,8 @@ static void sequencerTaskFunction(void* pvParameters) {
 		 * underrun from sequencer processing time. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-		/* Clean up voices that the audio task marked for deletion during
-		 * its render pass. Must happen before sequencerRoutine() which
-		 * may start new voices or steal existing ones. */
-		AudioEngine::cleanupDeletedVoices();
+		/* Voice cleanup is handled by the audio task — it is the sole
+		 * owner of all voice objects. The sequencer only enqueues events. */
 
 		sequencerRoutine();
 
