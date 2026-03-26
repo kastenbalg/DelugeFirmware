@@ -267,6 +267,9 @@ static void sequencerRoutine() {
 	uint32_t bufferEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
 
 	for (;;) {
+		/* No safety counter — the original tickSongFinalizeWindows had none.
+		 * Each tick advances timeNextTimerTickBig/scheduledSwungTickTime,
+		 * guaranteeing eventual termination when timeNextTick >= bufferEnd. */
 		int32_t nextTickType = 0;
 		uint32_t timeNextTick = AudioEngine::audioSampleTimer + 9999;
 

@@ -86,7 +86,28 @@ DRESULT disk_read(BYTE pdrv, /* Physical drive nmuber (0) */
 {
     logAudioAction("disk_read");
 
+#ifdef USE_FREERTOS
+    /* Split multi-sector reads into single-sector calls, releasing
+     * sdCardMutex between each. This allows the cluster loader task
+     * to interleave sample cluster reads between FatFS sector reads,
+     * preventing sample starvation during heavy file I/O.
+     *
+     * Each sd_read_sect(count=1) sends CMD17 (single block read),
+     * completes via DMA, and returns. The mutex release between
+     * sectors gives the cluster loader a window to grab it. */
+    DRESULT result = RES_OK;
+    for (UINT i = 0; i < count; i++)
+    {
+        DRESULT r = disk_read_without_streaming_first(pdrv, buff + (i * 512), sector + i, 1);
+        if (r != RES_OK)
+        {
+            result = r;
+            break;
+        }
+    }
+#else
     DRESULT result = disk_read_without_streaming_first(pdrv, buff, sector, count);
+#endif
 
     if (currentlySearchingForCluster)
         pendingGlobalMIDICommandNumClustersWritten++;
