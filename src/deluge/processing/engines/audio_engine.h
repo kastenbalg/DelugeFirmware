@@ -148,6 +148,7 @@ void stopAnyPreviewing();
 
 void songSwapAboutToHappen();
 void killAllVoices(bool deletingSong = false);
+void cleanupDeletedVoices(); /// FreeRTOS: called from sequencer task to finalize voice deletions
 void logAction(char const* string);
 void logAction(int32_t number);
 

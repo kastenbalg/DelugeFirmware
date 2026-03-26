@@ -272,6 +272,12 @@ void init() {
 	TimeStretcherPool::get().repopulate();
 }
 
+void cleanupDeletedVoices() {
+	for (Sound* sound : sounds) {
+		sound->cleanupDeletedVoices();
+	}
+}
+
 void killAllVoices(bool deletingSong) {
 	for (Sound* sound : sounds) {
 		sound->killAllVoices();

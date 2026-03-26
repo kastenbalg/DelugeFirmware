@@ -94,11 +94,11 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskNa
 /* --------------------------------------------------------------------------
  * Audio task: interrupt-driven via SSI TX DMA ping-pong descriptors.
  *
- * Two DMA descriptors (A and B) each cover half the 256-sample TX buffer.
- * When each 128-sample half-buffer transfer completes (~2.9ms at 44.1kHz),
+ * Two DMA descriptors (A and B) each cover half the 128-sample TX buffer.
+ * When each 64-sample half-buffer transfer completes (~1.45ms at 44.1kHz),
  * the DMA interrupt fires and notifies the audio task. The audio task wakes,
  * renders into the half that just finished playing, then sleeps until the
- * next interrupt. Multiple notifications are drained for overload recovery.
+ * next interrupt.
  *
  * This replaces the polling approach (vTaskDelayUntil + getTxBufferCurrentPlace)
  * with deterministic hardware-driven scheduling:
@@ -159,6 +159,12 @@ void ssiTxDmaInterruptInit(void) {
 	DMACn(SSI_TX_DMA_CHANNEL).CHCTRL_n |= 0x00020000uL; /* CLRINTMSK */
 }
 
+/* Audio CPU load measurement — uses OSTM0 (33.33 MHz free-running counter).
+ * Tracks worst-case render time over a measurement window. */
+extern "C" {
+#include "RZA1/ostm/ostm.h"
+}
+
 static void audioTaskFunction(void* pvParameters) {
 	(void)pvParameters;
 
@@ -167,11 +173,12 @@ static void audioTaskFunction(void* pvParameters) {
 
 	for (;;) {
 		/* Block until DMA half-buffer transfer completes.
-		 * The ISR fires every 128 samples (~2.9ms at 44.1kHz).
+		 * The ISR fires every 64 samples (~1.45ms at 44.1kHz).
 		 * The audio task is a pure DSP consumer: it drains the voice event
 		 * queue, renders all active voices/effects, and writes to the DMA buffer.
 		 * Tick logic and I/O are handled by the sequencer task. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
 		AudioEngine::routine();
 	}
 }
@@ -207,6 +214,7 @@ static void appTaskFunction(void* pvParameters) {
 
 extern "C" {
 int32_t uartGetTxBufferSpace(int32_t item);
+void setNumeric(const char* text);
 }
 
 class Song;
@@ -309,9 +317,12 @@ static void sequencerRoutine() {
 	playbackHandler.publishTempoState();
 }
 
+extern volatile uint32_t allocMutexContentionCount;
+
 static void sequencerTaskFunction(void* pvParameters) {
 	(void)pvParameters;
 	uint8_t graphicsCounter = 0;
+	uint16_t diagnosticCounter = 0;
 
 	for (;;) {
 		/* Block until DMA half-buffer transfer completes (~2.9ms).
@@ -322,6 +333,11 @@ static void sequencerTaskFunction(void* pvParameters) {
 		 * underrun from sequencer processing time. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+		/* Clean up voices that the audio task marked for deletion during
+		 * its render pass. Must happen before sequencerRoutine() which
+		 * may start new voices or steal existing ones. */
+		AudioEngine::cleanupDeletedVoices();
+
 		sequencerRoutine();
 
 		/* Graphics update every ~5th wake-up (~14.5ms) */
@@ -329,6 +345,11 @@ static void sequencerTaskFunction(void* pvParameters) {
 			graphicsCounter = 0;
 			graphicsUpdate();
 		}
+
+		/* Display audio CPU load as percentage every ~0.5 seconds during playback.
+		 * At 33.33MHz, the 1.45ms half-buffer deadline = ~48,330 cycles.
+		 * Display as percentage: (maxCycles / 48330) * 100.
+		 * Over 100% means the audio engine missed its deadline. */
 	}
 }
 

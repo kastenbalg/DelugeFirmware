@@ -49,7 +49,7 @@ extern void freezeWithError(char const* errmsg);
 #define TIMER_SYSTEM_SUPERFAST 1
 
 #ifdef USE_FREERTOS
-#define SSI_TX_BUFFER_NUM_SAMPLES 256 /* Ping-pong: two 128-sample halves, 2.9ms per half at 44.1kHz */
+#define SSI_TX_BUFFER_NUM_SAMPLES 128 /* Ping-pong: two 64-sample halves, 1.45ms per half at 44.1kHz */
 #else
 #define SSI_TX_BUFFER_NUM_SAMPLES 128
 #endif

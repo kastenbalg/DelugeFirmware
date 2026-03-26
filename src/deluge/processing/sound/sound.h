@@ -204,6 +204,7 @@ public:
 	                 const char* pathAttribute = NULL);
 
 	void voiceUnassigned(ModelStackWithSoundFlags* modelStack);
+	void cleanupDeletedVoices(); /// FreeRTOS: unassign and erase voices marked by audio task
 	bool isSourceActiveCurrently(int32_t s, ParamManagerForTimeline* paramManager);
 	bool isSourceActiveEverDisregardingMissingSample(int32_t s, ParamManager* paramManager);
 	bool isSourceActiveEver(int32_t s, ParamManager* paramManager);

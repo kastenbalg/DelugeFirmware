@@ -1447,6 +1447,10 @@ void AudioFileManager::thingFinishedLoading() {
 }
 
 #ifdef USE_FREERTOS
+/* Diagnostic counter — how many times the loader wakes per measurement period */
+volatile uint32_t clusterLoaderWakeCount = 0;
+volatile uint32_t clusterLoaderLoadCount = 0;
+
 /*
  * Entry point for the dedicated cluster loader FreeRTOS task.
  * Blocks on task notifications, then drains the loading queue one cluster
@@ -1456,6 +1460,7 @@ void AudioFileManager::clusterLoaderMain() {
 	for (;;) {
 		/* Block until a cluster is enqueued (or spurious wake) */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		clusterLoaderWakeCount++;
 
 		/* Drain the queue one cluster at a time */
 		while (true) {
@@ -1475,6 +1480,7 @@ void AudioFileManager::clusterLoaderMain() {
 				FREEZE_WITH_ERROR("E235");
 			}
 
+			clusterLoaderLoadCount++;
 			bool success = loadCluster(*cluster);
 
 			if (!success) {

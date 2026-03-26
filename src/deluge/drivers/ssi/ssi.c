@@ -39,12 +39,12 @@ PLACE_SDRAM_DATA int32_t ssiRxBuffer[SSI_RX_BUFFER_NUM_SAMPLES * NUM_MONO_INPUT_
 /*
  * Ping-pong DMA descriptors for interrupt-driven audio output.
  *
- * Two descriptors (A and B) each cover half the TX buffer (128 samples).
+ * Two descriptors (A and B) each cover half the TX buffer (64 samples).
  * A links to B, B links to A, creating continuous ping-pong operation.
  * Each descriptor triggers a DMA transfer-end interrupt when its half
- * completes (~2.9ms at 44.1kHz), waking the audio task to render.
+ * completes (~1.45ms at 44.1kHz), waking the audio task to render.
  *
- * Half-buffer size: 128 samples * 2 channels * 4 bytes = 1024 bytes
+ * Half-buffer size: 64 samples * 2 channels * 4 bytes = 512 bytes
  */
 #define HALF_TX_BUFFER_BYTES (SSI_TX_BUFFER_NUM_SAMPLES * NUM_MONO_OUTPUT_CHANNELS * sizeof(int32_t) / 2)
 #define HALF_TX_BUFFER_SAMPLES (SSI_TX_BUFFER_NUM_SAMPLES / 2)

@@ -129,6 +129,11 @@ public:
 	bool speedUpRelease();
 	bool shouldBeDeleted() { return delete_this_voice_; }
 
+	/// Mark for deletion without freeing resources. Under FreeRTOS, the audio
+	/// task calls this instead of setAsUnassigned — the sequencer task handles
+	/// actual resource cleanup to prevent double-free races.
+	void markForDeletion() { delete_this_voice_ = true; }
+
 	// This compares based on the priority of two voices
 	[[nodiscard]] std::strong_ordering operator<=>(const Voice& other) const {
 		return this->getPriorityRating() <=> other.getPriorityRating();

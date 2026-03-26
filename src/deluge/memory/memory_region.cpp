@@ -839,7 +839,25 @@ void MemoryRegion::dealloc(void* address) {
 		FREEZE_WITH_ERROR("M001");
 	}
 	if ((*header & SPACE_TYPE_MASK) == SPACE_HEADER_EMPTY) {
-		// double free
+		// double free — show which region to narrow down the object type
+		// M0In = internal, M0Ex = external, M0St = stealable, M0IS = internal small, M0ES = external small
+		if ((uint32_t)address >= start && (uint32_t)address < end) {
+			if (this == &GeneralMemoryAllocator::get().regions[MEMORY_REGION_STEALABLE]) {
+				FREEZE_WITH_ERROR("M0St");
+			}
+			else if (this == &GeneralMemoryAllocator::get().regions[MEMORY_REGION_INTERNAL]) {
+				FREEZE_WITH_ERROR("M0In");
+			}
+			else if (this == &GeneralMemoryAllocator::get().regions[MEMORY_REGION_EXTERNAL]) {
+				FREEZE_WITH_ERROR("M0Ex");
+			}
+			else if (this == &GeneralMemoryAllocator::get().regions[MEMORY_REGION_INTERNAL_SMALL]) {
+				FREEZE_WITH_ERROR("M0IS");
+			}
+			else if (this == &GeneralMemoryAllocator::get().regions[MEMORY_REGION_EXTERNAL_SMALL]) {
+				FREEZE_WITH_ERROR("M0ES");
+			}
+		}
 		FREEZE_WITH_ERROR("M000");
 	}
 #endif

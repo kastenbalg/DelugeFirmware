@@ -2519,6 +2519,16 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 		for (auto it = voices_.begin(); it != voices_.end();) {
 			ActiveVoice& voice = *it;
 
+#ifdef USE_FREERTOS
+			/* Skip voices marked for deletion — the sequencer may have freed
+			 * their resources during an overrun. Rendering them would access
+			 * freed memory. */
+			if (voice->shouldBeDeleted()) {
+				++it;
+				continue;
+			}
+#endif
+
 			/* Apply per-voice start offset for sample-accurate note-on timing.
 			 * On the first render after noteOn, skip startOffsetSamples at the
 			 * beginning of the buffer — the voice renders fewer samples into a
@@ -2539,12 +2549,23 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 			bool stillGoing = voice->render(modelStackWithSoundFlags, buf, samplesToRender, voice_rendered_in_stereo,
 			                                applyingPanAtVoiceLevel, sourcesChanged, doLPF, doHPF, pitchAdjust);
 			if (!stillGoing) {
+#ifdef USE_FREERTOS
+				/* Under FreeRTOS, only mark the voice for deletion.
+				 * The sequencer task (which runs after audio yields)
+				 * handles unassignment and erasure. This prevents the
+				 * audio task from freeing voice resources while the
+				 * sequencer might also try to free them. */
+				voice->markForDeletion();
+#else
 				this->checkVoiceExists(voice, "E201");
 				this->freeActiveVoice(voice, modelStackWithSoundFlags, false);
+#endif
 			}
 			++it;
 		}
+#ifndef USE_FREERTOS
 		std::erase_if(voices_, [](const ActiveVoice& voice) { return voice->shouldBeDeleted(); });
+#endif
 
 		// We know that nothing's patched to pan, so can read it in this very basic way.
 		int32_t pan = paramManager->getPatchedParamSet()->getValue(params::LOCAL_PAN) >> 1;
@@ -4897,6 +4918,18 @@ void Sound::freeActiveVoice(const ActiveVoice& voice, ModelStackWithSoundFlags* 
 	if (erase) {
 		std::erase(voices_, voice);
 	}
+}
+
+void Sound::cleanupDeletedVoices() {
+	/* Called from the sequencer task after the audio task has finished rendering.
+	 * Unassign resources and erase any voices the audio task marked for deletion. */
+	for (const ActiveVoice& voice : voices_) {
+		if (voice->shouldBeDeleted()) {
+			voice->unassignStuff(false);
+			this->voiceUnassigned(nullptr);
+		}
+	}
+	std::erase_if(voices_, [](const ActiveVoice& voice) { return voice->shouldBeDeleted(); });
 }
 
 void Sound::killAllVoices() {

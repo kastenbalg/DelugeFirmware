@@ -87,8 +87,15 @@ GeneralMemoryAllocator::GeneralMemoryAllocator()
 }
 
 #ifdef USE_FREERTOS
+volatile uint32_t allocMutexContentionCount = 0;
+
 void GeneralMemoryAllocator::lockMutex() {
-	rtos_mutex_lock(allocMutex);
+	/* Try to take the mutex without blocking first. If it fails,
+	 * we know there's contention — count it, then block. */
+	if (!rtos_mutex_trylock(allocMutex)) {
+		allocMutexContentionCount++;
+		rtos_mutex_lock(allocMutex);
+	}
 }
 void GeneralMemoryAllocator::unlockMutex() {
 	rtos_mutex_unlock(allocMutex);
