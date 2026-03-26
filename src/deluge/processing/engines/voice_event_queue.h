@@ -132,10 +132,13 @@ struct VoiceEvent {
 	};
 };
 
-/* Queue capacity. Must handle bursts from fast arps (multiple noteOn per tick),
- * MPE expression streams, and simultaneous UI parameter changes.
- * 64 events at ~48 bytes each = ~3KB. */
-static constexpr size_t kVoiceEventQueueCapacity = 64;
+/* Queue capacity. Must handle bursts from multiple arp clips firing
+ * simultaneously (4 clips × 8-note chords = 64 noteOn+noteOff), plus
+ * MPE expression streams (8 voices × 3 dimensions = 24), plus UI
+ * parameter changes. The audio task drains the entire queue every
+ * render cycle (~1.45ms / 690Hz), so bursts are absorbed quickly.
+ * 256 events at ~48 bytes each = ~12KB. */
+static constexpr size_t kVoiceEventQueueCapacity = 256;
 
 #ifdef USE_FREERTOS
 
