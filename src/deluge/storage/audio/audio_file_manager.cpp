@@ -1006,11 +1006,22 @@ getOutEarly:
 	}
 #endif
 
-	/* Two-level locking: the loader only needs sdCardMutex (taken inside
-	 * disk_read_without_streaming_first), not the FatFS volume mutex.
-	 * This lets it interleave with FatFS operations at the sector level. */
-	DRESULT result = disk_read_without_streaming_first(
-	    SD_PORT, (BYTE*)cluster.data, sample->clusters.getElement(cluster.clusterIndex)->sdAddress, numSectors);
+	/* Read one sector at a time, releasing sdCardMutex between each.
+	 * This allows the cluster loader to interleave with FatFS operations
+	 * at the sector level, and makes partial cluster data available sooner —
+	 * the audio engine can start playing from the first sectors while
+	 * the rest are still loading.
+	 *
+	 * disk_read_without_streaming_first takes/releases sdCardMutex internally
+	 * for each single-sector call. */
+	LBA_t startSector = sample->clusters.getElement(cluster.clusterIndex)->sdAddress;
+	DRESULT result = RES_OK;
+	for (int32_t i = 0; i < numSectors; i++) {
+		result = disk_read_without_streaming_first(SD_PORT, (BYTE*)cluster.data + (i * 512), startSector + i, 1);
+		if (result != RES_OK) {
+			break;
+		}
+	}
 
 #if REPORT_LOAD_TIME
 	uint16_t endTime = MTU2.TCNT_0;

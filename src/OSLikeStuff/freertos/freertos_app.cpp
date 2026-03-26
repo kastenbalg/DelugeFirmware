@@ -19,9 +19,10 @@
  * FreeRTOS application integration for the Deluge firmware.
  *
  * Phase 6b architecture:
- * - Audio task at FreeRTOS priority 7 (highest) — pure DSP, drains voice event queue
- * - Sequencer task at priority 6 — tick advancement, event scheduling, MIDI/CV I/O, UI graphics
- * - Cluster loader task at priority 5 — loads sample clusters from SD card
+ * - Audio task at FreeRTOS priority 7 — pure DSP, drains voice event queue
+ * - Cluster loader at priority 7 (same as audio) — uses SDHI DMA (different
+ *   hardware from SSI DMA), sleeps during transfers, runs when audio sleeps
+ * - Sequencer task at priority 6 — tick advancement, event scheduling, UI graphics
  * - App task at FreeRTOS priority 3 — runs cooperative scheduler for file ops
  * - IRQ handler bridges to existing GIC dispatch via vApplicationFPUSafeIRQHandler
  */
@@ -411,8 +412,14 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	                  3, /* Same priority for all non-audio, no time-slicing */
 	                  sAppTaskStack, &sAppTaskTCB);
 
-	/* Cluster loader task at priority 5 — above app, below audio */
-	clusterLoaderTaskHandle = xTaskCreateStatic(clusterLoaderTaskFunction, "ClusterLoader", 2048, NULL, 5,
+	/* Cluster loader task at priority 7 (same as audio).
+	 * Audio and loader use different hardware (SSI DMA vs SDHI DMA) and
+	 * can genuinely run in parallel. With configUSE_TIME_SLICING=0,
+	 * same-priority tasks don't preempt each other — the loader runs
+	 * whenever audio is sleeping on ulTaskNotifyTake, and sleeps on
+	 * the SDHI semaphore during SD transfers (freeing CPU for audio). */
+	clusterLoaderTaskHandle = xTaskCreateStatic(clusterLoaderTaskFunction, "ClusterLoader", 2048, NULL,
+	                                            configMAX_PRIORITIES - 1, /* Priority 7: same as audio */
 	                                            sClusterLoaderStack, &sClusterLoaderTCB);
 
 	/* Sequencer task at priority 6 — tick advancement, events, MIDI/CV I/O, UI graphics */
