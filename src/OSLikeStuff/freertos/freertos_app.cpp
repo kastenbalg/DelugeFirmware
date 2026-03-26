@@ -179,6 +179,13 @@ static void audioTaskFunction(void* pvParameters) {
 		 * Tick logic and I/O are handled by the sequencer task. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+		/* Process all pending voice events before rendering.
+		 * This is where noteOn/noteOff/expression/kill events from the
+		 * sequencer, app, and MIDI tasks get applied to voice state.
+		 * The audio task is the sole owner of voices — all modifications
+		 * happen here. */
+		voiceEventProcessAll();
+
 		AudioEngine::routine();
 	}
 }
@@ -246,6 +253,7 @@ static void graphicsUpdate() {
 #include "definitions.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "storage/cluster/cluster_prefetch.h"
 
 #define TICK_TYPE_SWUNG 1
@@ -367,6 +375,9 @@ static void sequencerTaskFunction(void* pvParameters) {
  * Entry point: create tasks and start the FreeRTOS scheduler
  * -------------------------------------------------------------------------- */
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
+	/* Initialize the voice event queue before creating tasks */
+	voiceEventQueueInit();
+
 	/* App task at priority 3 — all non-audio tasks run cooperatively here */
 	xTaskCreateStatic(appTaskFunction, "App", 8192, (void*)schedulerEntry,
 	                  3, /* Same priority for all non-audio, no time-slicing */
