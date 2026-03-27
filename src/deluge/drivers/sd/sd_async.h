@@ -116,6 +116,7 @@ int32_t sdAsyncSyncWrite(uint32_t sector, const uint8_t* buffer, uint32_t sector
 /* Check if the async layer is active (post-scheduler). Before the scheduler
  * starts, callers should use the old synchronous sd_read_sect/sd_write_sect. */
 bool sdAsyncIsActive(void);
+int sdAsyncGetState(void); /* Returns current SdAsyncState as int, for diagnostics */
 
 #ifdef __cplusplus
 }

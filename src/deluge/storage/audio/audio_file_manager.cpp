@@ -1023,25 +1023,59 @@ getOutEarly:
 		/* Clear any pending notifications before we submit */
 		ulTaskNotifyTake(pdTRUE, 0);
 
-		sdAsyncReadCluster(
+		extern volatile uint32_t sdAsyncISRCount;
+		uint32_t isrCountBefore = sdAsyncISRCount;
+
+		/* Capture the calling task so the callback notifies the right waiter,
+		 * whether this is the cluster loader task or the app task. */
+		struct ClusterReadCtx {
+			volatile int32_t* result;
+			TaskHandle_t task;
+		};
+		ClusterReadCtx ctx = {&asyncResult, xTaskGetCurrentTaskHandle()};
+
+		bool enqueued = sdAsyncReadCluster(
 		    startSector, (uint8_t*)cluster.data, numSectors,
 		    /* callback */
 		    [](int32_t res, void* ud) {
-			    volatile int32_t* pResult = (volatile int32_t*)ud;
-			    *pResult = res;
-			    /* Notify the cluster loader task from ISR context */
-			    extern TaskHandle_t clusterLoaderTaskHandle;
-			    if (clusterLoaderTaskHandle != NULL) {
-				    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-				    vTaskNotifyGiveFromISR(clusterLoaderTaskHandle, &xHigherPriorityTaskWoken);
-				    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-			    }
+			    ClusterReadCtx* c = (ClusterReadCtx*)ud;
+			    *c->result = res;
+			    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+			    vTaskNotifyGiveFromISR(c->task, &xHigherPriorityTaskWoken);
+			    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 		    },
-		    (void*)&asyncResult);
+		    (void*)&ctx);
 
-		/* Block until the ISR completes the read */
-		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-		result = (asyncResult == 0) ? RES_OK : RES_ERROR;
+		if (!enqueued) {
+			/* Fast queue was full — fall back to synchronous read */
+			result = RES_OK;
+			for (int32_t i = 0; i < (int32_t)numSectors; i++) {
+				result =
+				    disk_read_without_streaming_first(SD_PORT, (BYTE*)cluster.data + (i * 512), startSector + i, 1);
+				if (result != RES_OK)
+					break;
+			}
+		}
+		else {
+			/* Block until the ISR completes the read — 5s timeout for diagnostics.
+			 * Format: C + state(0-4) + 2-digit ISR delta
+			 * States: 0=IDLE 1=CMD_SENT 2=ALL_END_WAIT 3=SECTOR_DONE 4=ERROR
+			 * Delta=0 means the ISR never fired at all after the kick. */
+			if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000)) == 0) {
+				extern void freezeWithError(const char* errmsg);
+				uint32_t delta = sdAsyncISRCount - isrCountBefore;
+				if (delta > 99)
+					delta = 99;
+				char buf[5];
+				buf[0] = 'C';
+				buf[1] = '0' + sdAsyncGetState();
+				buf[2] = '0' + (delta / 10) % 10;
+				buf[3] = '0' + delta % 10;
+				buf[4] = 0;
+				freezeWithError(buf);
+			}
+			result = (asyncResult == 0) ? RES_OK : RES_ERROR;
+		}
 	}
 	else
 #endif

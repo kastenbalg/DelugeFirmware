@@ -141,7 +141,6 @@ static void slowQueueDequeue(void) {
  * States:
  *   IDLE         — No active transfer. Dequeue next request.
  *   CMD_SENT     — CMD17/CMD24 issued, waiting for response interrupt.
- *   DMA_RUNNING  — DMA transfer in progress, waiting for completion.
  *   ALL_END_WAIT — Waiting for "All end" interrupt after DMA.
  *   WRITE_BUSY   — After write, waiting for card to finish programming.
  *   SECTOR_DONE  — Sector complete, decide next action (interleave).
@@ -151,7 +150,6 @@ static void slowQueueDequeue(void) {
 typedef enum {
 	SD_STATE_IDLE,
 	SD_STATE_CMD_SENT,
-	SD_STATE_DMA_RUNNING,
 	SD_STATE_ALL_END_WAIT,
 	SD_STATE_SECTOR_DONE,
 	SD_STATE_ERROR,
@@ -317,31 +315,10 @@ static void handleCmdResponse(void) {
 		return;
 	}
 
-	sState.state = SD_STATE_DMA_RUNNING;
-	/* Now the DMAC runs autonomously. The next ISR fires when DMA completes. */
-}
-
-/* ---- Handle DMA completion ---- */
-static void handleDmaComplete(void) {
-	SDHNDL* hndl = sState.hndl;
-
-	/* Disable DMA */
-	sddev_disable_dma(hndl->sd_port);
-	sd_outp(hndl, CC_EXT_MODE, (unsigned short)(sd_inp(hndl, CC_EXT_MODE) & ~CC_EXT_MODE_DMASDRW));
-
-	/* Restore card detect interrupt */
-	_sd_set_int_mask(hndl, SD_INFO1_MASK_DET_CD, 0);
-
-	/* Wait for "All end" — this may have already fired with the DMA interrupt.
-	 * Check if it's set. If not, we wait for the next ISR call. */
-	if (hndl->int_info1 & SD_INFO1_MASK_DATA_TRNS) {
-		/* Already done — proceed immediately */
-		handleAllEnd();
-	}
-	else {
-		/* Wait for the next ISR with DATA_TRNS set */
-		sState.state = SD_STATE_ALL_END_WAIT;
-	}
+	/* DMA is now running autonomously. Wait for the SDHI DATA_TRNS ("all end")
+	 * interrupt — the card won't signal transfer complete until DMA is done,
+	 * so we don't need a separate DMA completion interrupt. */
+	sState.state = SD_STATE_ALL_END_WAIT;
 }
 
 /* ---- Handle "All end" interrupt ---- */
@@ -354,6 +331,18 @@ static void handleAllEnd(void) {
 		sState.state = SD_STATE_ERROR;
 		return;
 	}
+
+	/* Disable DMA now that the transfer is complete */
+	sddev_disable_dma(hndl->sd_port);
+	sd_outp(hndl, CC_EXT_MODE, (unsigned short)(sd_inp(hndl, CC_EXT_MODE) & ~CC_EXT_MODE_DMASDRW));
+
+	/* Restore card detect interrupt */
+	_sd_set_int_mask(hndl, SD_INFO1_MASK_DET_CD, 0);
+
+	/* DATA_TRNS fires when the card is done, but the DMAC's writes may still
+	 * be in flight to DRAM. A DSB ensures all bus-master writes are committed
+	 * before we invalidate the cache, otherwise the CPU can read stale data. */
+	__asm__ volatile("dsb" ::: "memory");
 
 	/* Invalidate cache after read DMA */
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
@@ -689,11 +678,6 @@ void sdAsyncISR(void) {
 		}
 		break;
 
-	case SD_STATE_DMA_RUNNING:
-		/* DMA transfer complete — check the DMA end flag */
-		handleDmaComplete();
-		break;
-
 	case SD_STATE_ALL_END_WAIT:
 		/* "All end" interrupt received */
 		if (hndl->int_info1 & SD_INFO1_MASK_DATA_TRNS) {
@@ -722,45 +706,18 @@ void sdAsyncISR(void) {
 
 static void sdAsyncKick(void) {
 	if (sState.state != SD_STATE_IDLE) {
-		return; /* Already running */
+		return; /* Already running — ISR will pick up new work naturally */
 	}
 
-	/* TEMPORARY DIAGNOSTIC: Instead of using our ISR state machine,
-	 * do a synchronous single-sector read using sd_read_sect to verify
-	 * the hardware works. If this succeeds, our ISR register sequence
-	 * is the problem. Process the first request from whichever queue
-	 * has work. */
-	bool isFast;
-	SdRequest* req = pickNextRequest(&isFast);
-	if (req == NULL) {
-		return;
-	}
-
-	/* Temporarily disable async so sd_read_sect uses the semaphore path */
-	sState.active = false;
-
-	if (req->type == SD_REQ_WRITE) {
-		int err = sd_write_sect(sState.hndl->sd_port, req->buffer, req->sector, req->sectorCount, 0x0001u);
-		completeRequest(req, err);
-	}
-	else {
-		int err = sd_read_sect(sState.hndl->sd_port, req->buffer, req->sector, req->sectorCount);
-		completeRequest(req, err);
-	}
-
-	if (isFast) {
-		fastQueueDequeue();
-	}
-	else {
-		slowQueueDequeue();
-	}
-
-	sState.active = true;
-
-	/* Check if there's more work — recursively kick */
-	if (!fastQueueEmpty() || !slowQueueEmpty()) {
-		sdAsyncKick();
-	}
+	/* Kick the ISR state machine from task context.
+	 * Disable interrupts briefly to prevent the SDHI ISR from
+	 * running concurrently with our initial state machine step.
+	 * The ISR state machine sends CMD17/CMD24 which triggers the
+	 * first SDHI interrupt — from then on, the ISR chains
+	 * transfers autonomously. */
+	UBaseType_t savedInterrupts = taskENTER_CRITICAL_FROM_ISR();
+	sdAsyncISR(); /* Transitions from IDLE → CMD_SENT */
+	taskEXIT_CRITICAL_FROM_ISR(savedInterrupts);
 }
 
 /* ========================================================================
@@ -826,6 +783,10 @@ void sdAsyncStart(void) {
 
 bool sdAsyncIsActive(void) {
 	return sState.active;
+}
+
+int sdAsyncGetState(void) {
+	return (int)sState.state;
 }
 
 bool sdAsyncReadCluster(uint32_t sector, uint8_t* buffer, uint32_t sectorCount, SdAsyncCallback callback,
@@ -903,27 +864,13 @@ int32_t sdAsyncSyncRead(uint32_t sector, uint8_t* buffer, uint32_t sectorCount) 
 	if (xSemaphoreTake(sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
 		extern void freezeWithError(const char* errmsg);
 		extern volatile uint32_t sdAsyncISRCount;
-		SDHNDL* hndl = sState.hndl;
 
+		/* Format: I + state(0-4) + 2-digit ISR count
+		 * e.g. "I136" = stuck in CMD_SENT(1) after 36 ISRs
+		 * States: 0=IDLE 1=CMD_SENT 2=ALL_END_WAIT 3=SECTOR_DONE 4=ERROR */
 		char buf[5];
-		unsigned short hw_info1 = sd_inp(hndl, SD_INFO1);
-		unsigned short clk = sd_inp(hndl, SD_CLK_CTRL);
-
-		/* First char: state indicator */
-		if (sdAsyncISRCount > 0) {
-			buf[0] = 'I'; /* ISR fired but state machine stuck */
-		}
-		else if (hw_info1 & 0x0001) {
-			buf[0] = 'R'; /* RESP flag set but interrupt not delivered */
-		}
-		else if (clk & 0x0100) {
-			buf[0] = 'S'; /* Clock on, no response — card not responding */
-		}
-		else {
-			buf[0] = 'C'; /* Clock off — fundamental issue */
-		}
-		/* Remaining: ISR count */
-		buf[1] = '0' + (sdAsyncISRCount / 100) % 10;
+		buf[0] = 'I';
+		buf[1] = '0' + (int)sState.state;
 		buf[2] = '0' + (sdAsyncISRCount / 10) % 10;
 		buf[3] = '0' + sdAsyncISRCount % 10;
 		buf[4] = 0;

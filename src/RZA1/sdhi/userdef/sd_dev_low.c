@@ -1369,15 +1369,7 @@ volatile uint32_t sdAsyncISRCount = 0;
 static void sddev_sd_int_handler_0(uint32_t int_sense)
 {
     sd_int_handler(0);
-#ifdef USE_FREERTOS
-    if (sdAsyncIsActive()) {
-        sdAsyncISRCount++;
-        sdAsyncISR();
-    }
-    else {
-        sdhi_semaphore_give_from_isr();
-    }
-#endif
+    /* Port 0 is unused on the Deluge — no FreeRTOS hooks needed */
 }
 
 /******************************************************************************
@@ -1390,7 +1382,13 @@ static void sddev_sd_int_handler_1(uint32_t int_sense)
 {
     sd_int_handler(1);
 #ifdef USE_FREERTOS
-    sdhi_semaphore_give_from_isr();
+    if (sdAsyncIsActive()) {
+        sdAsyncISRCount++;
+        sdAsyncISR();
+    }
+    else {
+        sdhi_semaphore_give_from_isr();
+    }
 #endif
 }
 
