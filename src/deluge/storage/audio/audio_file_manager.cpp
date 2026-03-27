@@ -38,6 +38,7 @@
 
 #ifdef USE_FREERTOS
 #include "FreeRTOS.h"
+#include "drivers/sd/sd_async.h"
 #include "task.h"
 #endif
 
@@ -1006,20 +1007,52 @@ getOutEarly:
 	}
 #endif
 
-	/* Read one sector at a time, releasing sdCardMutex between each.
-	 * This allows the cluster loader to interleave with FatFS operations
-	 * at the sector level, and makes partial cluster data available sooner —
-	 * the audio engine can start playing from the first sectors while
-	 * the rest are still loading.
-	 *
-	 * disk_read_without_streaming_first takes/releases sdCardMutex internally
-	 * for each single-sector call. */
 	LBA_t startSector = sample->clusters.getElement(cluster.clusterIndex)->sdAddress;
-	DRESULT result = RES_OK;
-	for (int32_t i = 0; i < numSectors; i++) {
-		result = disk_read_without_streaming_first(SD_PORT, (BYTE*)cluster.data + (i * 512), startSector + i, 1);
-		if (result != RES_OK) {
-			break;
+	DRESULT result;
+
+#ifdef USE_FREERTOS
+	if (sdAsyncIsActive()) {
+		/* Use the async fast path — enqueue the cluster read and block
+		 * until the ISR state machine completes it. The ISR interleaves
+		 * this with slow-path FatFS reads at the sector level (N:1 ratio).
+		 *
+		 * The callback notifies the cluster loader task handle. */
+		extern TaskHandle_t clusterLoaderTaskHandle;
+		volatile int32_t asyncResult = -1;
+
+		/* Clear any pending notifications before we submit */
+		ulTaskNotifyTake(pdTRUE, 0);
+
+		sdAsyncReadCluster(
+		    startSector, (uint8_t*)cluster.data, numSectors,
+		    /* callback */
+		    [](int32_t res, void* ud) {
+			    volatile int32_t* pResult = (volatile int32_t*)ud;
+			    *pResult = res;
+			    /* Notify the cluster loader task from ISR context */
+			    extern TaskHandle_t clusterLoaderTaskHandle;
+			    if (clusterLoaderTaskHandle != NULL) {
+				    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+				    vTaskNotifyGiveFromISR(clusterLoaderTaskHandle, &xHigherPriorityTaskWoken);
+				    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+			    }
+		    },
+		    (void*)&asyncResult);
+
+		/* Block until the ISR completes the read */
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		result = (asyncResult == 0) ? RES_OK : RES_ERROR;
+	}
+	else
+#endif
+	{
+		/* Pre-scheduler synchronous path (boot) */
+		result = RES_OK;
+		for (int32_t i = 0; i < numSectors; i++) {
+			result = disk_read_without_streaming_first(SD_PORT, (BYTE*)cluster.data + (i * 512), startSector + i, 1);
+			if (result != RES_OK) {
+				break;
+			}
 		}
 	}
 

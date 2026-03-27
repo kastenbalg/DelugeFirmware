@@ -38,6 +38,7 @@
 #include "RZA1/sdhi/inc/sdif.h"
 #include "RZA1/system/rza_io_regrw.h"
 #include "deluge/deluge.h"
+#include "deluge/drivers/sd/sd_async.h"
 #include "deluge/drivers/uart/uart.h"
 #include "diskio.h"
 #include "ff.h"
@@ -86,28 +87,7 @@ DRESULT disk_read(BYTE pdrv, /* Physical drive nmuber (0) */
 {
     logAudioAction("disk_read");
 
-#ifdef USE_FREERTOS
-    /* Split multi-sector reads into single-sector calls, releasing
-     * sdCardMutex between each. This allows the cluster loader task
-     * to interleave sample cluster reads between FatFS sector reads,
-     * preventing sample starvation during heavy file I/O.
-     *
-     * Each sd_read_sect(count=1) sends CMD17 (single block read),
-     * completes via DMA, and returns. The mutex release between
-     * sectors gives the cluster loader a window to grab it. */
-    DRESULT result = RES_OK;
-    for (UINT i = 0; i < count; i++)
-    {
-        DRESULT r = disk_read_without_streaming_first(pdrv, buff + (i * 512), sector + i, 1);
-        if (r != RES_OK)
-        {
-            result = r;
-            break;
-        }
-    }
-#else
     DRESULT result = disk_read_without_streaming_first(pdrv, buff, sector, count);
-#endif
 
     if (currentlySearchingForCluster)
         pendingGlobalMIDICommandNumClustersWritten++;
@@ -224,27 +204,27 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
 
     BYTE err;
 
-#ifndef USE_FREERTOS
-    /* Under FreeRTOS, sdCardMutex serializes access — this boolean
-     * check is redundant and causes false positives when the cluster
-     * loader (pri 5) preempts the app task (pri 3) mid-operation. */
+#ifdef USE_FREERTOS
+    /* When the async SD layer is active, enqueue a slow-path read request.
+     * The ISR state machine processes it asynchronously with sector-level
+     * interleaving against cluster reads. The calling task blocks on a
+     * semaphore until all sectors are transferred. */
+    if (sdAsyncIsActive())
+    {
+        int32_t result = sdAsyncSyncRead(sector, buff, count);
+        return (result == 0) ? RES_OK : RES_ERROR;
+    }
+#endif
+
+    /* Pre-scheduler synchronous path (boot) or non-FreeRTOS */
     if (currentlyAccessingCard)
     {
         if (ALPHA_OR_BETA_VERSION)
         {
-            // Operatricks got! But I think I fixed.
             FREEZE_WITH_ERROR("E259");
         }
     }
-#endif
 
-    // uint16_t startTime = MTU2.TCNT_0;
-
-    /* Under FreeRTOS with semaphore-based SDHI waiting, sd_read_sect blocks
-     * on the SDHI semaphore during DMA transfers. The calling task sleeps,
-     * freeing the CPU for audio, timer daemon, and other tasks. No priority
-     * boosting or scheduler suspension is needed — the sdCardMutex serializes
-     * access, and the task sleeps (not polls) during hardware operations. */
     rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;
 
@@ -276,7 +256,16 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
 
     BYTE err;
 
-#ifndef USE_FREERTOS
+#ifdef USE_FREERTOS
+    /* When the async SD layer is active, enqueue a slow-path write request. */
+    if (sdAsyncIsActive())
+    {
+        int32_t result = sdAsyncSyncWrite(sector, buff, count);
+        return (result == 0) ? RES_OK : RES_ERROR;
+    }
+#endif
+
+    /* Pre-scheduler synchronous path (boot) or non-FreeRTOS */
     if (currentlyAccessingCard)
     {
         if (ALPHA_OR_BETA_VERSION)
@@ -284,7 +273,6 @@ DRESULT disk_write(BYTE pdrv, /* Physical drive nmuber to identify the drive */
             FREEZE_WITH_ERROR("E258");
         }
     }
-#endif
 
     rtos_mutex_lock(sdCardMutex);
     currentlyAccessingCard = 1;

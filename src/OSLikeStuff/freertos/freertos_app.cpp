@@ -173,6 +173,10 @@ static void audioTaskFunction(void* pvParameters) {
 	/* Initialize the DMA interrupt now that the scheduler is running */
 	ssiTxDmaInterruptInit();
 
+	/* Start the async SD layer — all SD operations now go through
+	 * the ISR state machine instead of synchronous sd_read_sect/sd_write_sect */
+	sdAsyncStart();
+
 	for (;;) {
 		/* Block until DMA half-buffer transfer completes.
 		 * The ISR fires every 64 samples (~1.45ms at 44.1kHz).
@@ -403,9 +407,14 @@ static void sequencerTaskFunction(void* pvParameters) {
 /* --------------------------------------------------------------------------
  * Entry point: create tasks and start the FreeRTOS scheduler
  * -------------------------------------------------------------------------- */
+extern "C" {
+#include "deluge/drivers/sd/sd_async.h"
+}
+
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
-	/* Initialize the voice event queue before creating tasks */
+	/* Initialize the voice event queue and async SD layer before creating tasks */
 	voiceEventQueueInit();
+	sdAsyncInit();
 
 	/* App task at priority 3 — all non-audio tasks run cooperatively here */
 	xTaskCreateStatic(appTaskFunction, "App", 8192, (void*)schedulerEntry,

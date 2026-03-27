@@ -1362,11 +1362,23 @@ int sddev_finalize(int sd_port)
 * Arguments    : Interrupt mode
 * Return Value : none
 ******************************************************************************/
+extern void sdAsyncISR(void);
+extern int sdAsyncIsActive(void);
+
 static void sddev_sd_int_handler_0(uint32_t int_sense)
 {
     sd_int_handler(0);
 #ifdef USE_FREERTOS
-    sdhi_semaphore_give_from_isr();
+    if (sdAsyncIsActive()) {
+        /* When the async layer is active, drive the ISR state machine
+         * instead of giving the semaphore. The state machine handles
+         * all SD operations asynchronously. */
+        sdAsyncISR();
+    }
+    else {
+        /* Before async layer starts (boot), use semaphore for synchronous path */
+        sdhi_semaphore_give_from_isr();
+    }
 #endif
 }
 
