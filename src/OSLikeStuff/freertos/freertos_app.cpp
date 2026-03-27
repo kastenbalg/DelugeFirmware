@@ -115,6 +115,10 @@ extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char* pcTaskNa
 #include "drivers/ssi/ssi.h"
 #include "processing/engines/voice_event_queue.h"
 
+extern "C" {
+#include "drivers/sd/sd_async.h"
+}
+
 namespace AudioEngine {
 void routine();
 }
@@ -407,10 +411,6 @@ static void sequencerTaskFunction(void* pvParameters) {
 /* --------------------------------------------------------------------------
  * Entry point: create tasks and start the FreeRTOS scheduler
  * -------------------------------------------------------------------------- */
-extern "C" {
-#include "deluge/drivers/sd/sd_async.h"
-}
-
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	/* Initialize the voice event queue and async SD layer before creating tasks */
 	voiceEventQueueInit();

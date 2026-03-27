@@ -104,7 +104,19 @@ int _sd_set_clock(SDHNDL *hndl,int clock, int enable)
 		if(i==SCLKDIVEN_LOOP_COUNT){
 			hndl->error = SD_ERR_CBSY_ERROR;
 		}
+#ifdef USE_FREERTOS
+		/* Under FreeRTOS with async SD, keep the clock running permanently.
+		 * The ISR state machine needs the clock to send commands at any time. */
+		{
+			extern int sdAsyncIsActive(void);
+			if (!sdAsyncIsActive()) {
+				sd_outp(hndl,SD_CLK_CTRL,0);	/* halt (boot only) */
+			}
+			/* else: leave clock running */
+		}
+#else
 		sd_outp(hndl,SD_CLK_CTRL,0);		/* halt */
+#endif
 	}
 	return SD_OK;
 }

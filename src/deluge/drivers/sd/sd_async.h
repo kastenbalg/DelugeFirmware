@@ -39,7 +39,8 @@
 
 #ifdef USE_FREERTOS
 
-#include <cstdint>
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -26,29 +26,31 @@
 #include "RZA1/sdhi/src/sd/inc/access/sd.h"
 #include "RZA1/system/iodefine.h"
 
-/* ---- Cache maintenance ---- */
-extern void v7_dma_inv_range(intptr_t start, intptr_t end);
+/* ---- Cache maintenance and data memory barrier ---- */
+#include "RZA1/compiler/asm/inc/asm.h"
 
-/* ---- SDHI driver internals we need to call ---- */
-extern SDHNDL* _sd_get_hndls(int sd_port);
-extern void _sd_set_arg(SDHNDL* hndl, unsigned short h_arg, unsigned short l_arg);
-extern void _sd_set_int_mask(SDHNDL* hndl, unsigned short mask1, unsigned short mask2);
-extern void _sd_clear_int_mask(SDHNDL* hndl, unsigned short mask1, unsigned short mask2);
-extern void _sd_clear_info(SDHNDL* hndl, unsigned short clear1, unsigned short clear2);
-extern int _sd_check_info2_err(SDHNDL* hndl);
-extern void _sd_get_info2(SDHNDL* hndl);
-extern int _sd_check_media(SDHNDL* hndl);
-extern int _sd_set_clock(SDHNDL* hndl, int clock, int enable);
-extern int _sd_get_int(SDHNDL* hndl);
+/* ---- SDHI driver internals ---- */
+/* _sd_get_hndls is a macro defined in sd.h: #define _sd_get_hndls(a) SDHandle[a]
+ * The extern declarations below use the prototypes from sd.h (included above).
+ * Functions that sd.h already declares don't need re-declaration. */
 
-/* DMA functions */
+/* DMA functions — not declared in sd.h */
 extern int sddev_init_dma(int sd_port, unsigned long buff, unsigned long reg, long cnt, int dir);
 extern int sddev_disable_dma(int sd_port);
 
-/* SD port config */
-#ifndef SD_PORT
-#define SD_PORT 0
-#endif
+/* Clock divider — declared in sdif.h but we need it here */
+extern unsigned int sddev_get_clockdiv(int sd_port, int clock);
+
+/* Original synchronous SD functions — used for diagnostic fallback */
+extern int sd_read_sect(int sd_port, unsigned char* buff, unsigned long psn, long cnt);
+extern int sd_write_sect(int sd_port, unsigned char const* buff, unsigned long psn, long cnt, int writemode);
+
+/* SD port config — defined in RZA1/cpu_specific.h */
+#include "RZA1/cpu_specific.h"
+
+/* Forward declarations for functions used before definition */
+static void handleAllEnd(void);
+static void handleSectorDone(void);
 
 /* ========================================================================
  * Simple lock-free SPSC ring buffers for fast and slow queues.
@@ -92,7 +94,7 @@ static bool fastQueueEnqueue(const SdRequest* req) {
 		return false;
 	}
 	sFastQueue.entries[sFastQueue.head] = *req;
-	__DMB(); /* Ensure the entry is written before advancing head */
+	__asm__ volatile("dmb" ::: "memory"); /* Ensure the entry is written before advancing head */
 	sFastQueue.head = (sFastQueue.head + 1) % SD_FAST_QUEUE_SIZE;
 	return true;
 }
@@ -102,7 +104,7 @@ static bool slowQueueEnqueue(const SdRequest* req) {
 		return false;
 	}
 	sSlowQueue.entries[sSlowQueue.head] = *req;
-	__DMB();
+	__asm__ volatile("dmb" ::: "memory");
 	sSlowQueue.head = (sSlowQueue.head + 1) % SD_SLOW_QUEUE_SIZE;
 	return true;
 }
@@ -158,15 +160,16 @@ typedef enum {
 /* Tracks the current transfer state */
 static struct {
 	SdAsyncState state;
-	SdRequest* currentReq;     /* Points into the queue entry */
-	bool currentIsFast;        /* Which queue the current request came from */
-	uint32_t currentSector;    /* Next sector to transfer */
-	uint8_t* currentBuffer;    /* Next buffer position */
-	uint32_t sectorsRemaining; /* Sectors left in current request */
-	uint8_t fastCounter;       /* Fast-path sectors done in current round */
-	SDHNDL* hndl;              /* SDHI hardware handle */
-	int dma64;                 /* DMA 64-byte transfer mode flag */
-	bool active;               /* True after sdAsyncStart() */
+	SdRequest* currentReq;       /* Points into the queue entry */
+	bool currentIsFast;          /* Which queue the current request came from */
+	uint32_t currentSector;      /* Next sector to transfer */
+	uint8_t* currentBuffer;      /* Next buffer position */
+	uint32_t sectorsRemaining;   /* Sectors left in current request */
+	uint8_t fastCounter;         /* Fast-path sectors done in current round */
+	SDHNDL* hndl;                /* SDHI hardware handle */
+	int dma64;                   /* DMA 64-byte transfer mode flag */
+	bool active;                 /* True after sdAsyncStart() */
+	unsigned short savedClkCtrl; /* Clock register value saved during init */
 } sState;
 
 /* ---- Helper: compute the SD card address from sector number ---- */
@@ -180,15 +183,22 @@ static void startSectorRead(void) {
 	SDHNDL* hndl = sState.hndl;
 	uint32_t addr = sectorToAddr(sState.currentSector);
 
-	/* Clear any leftover interrupt flags */
+	/* Match the exact sequence from the original _sd_single_read + _sd_send_mcmd.
+	 * Order matters — the SDHI hardware has implicit assumptions about
+	 * register write sequence. */
+
+	/* Clear software interrupt tracking */
 	hndl->int_info1 = 0;
 	hndl->int_info2 = 0;
 
-	/* Set block size */
+	/* Set block size and disable auto-CMD12 (same as sd_read_sect) */
 	sd_outp(hndl, SD_SIZE, 512);
-	sd_outp(hndl, SD_STOP, 0x0000); /* No auto-CMD12 */
+	sd_outp(hndl, SD_STOP, 0x0000);
 
-	/* Set up 64-byte DMA mode if supported */
+	/* Step 1: Enable response and ILA interrupts (same as _sd_single_read line 497) */
+	_sd_set_int_mask(hndl, SD_INFO1_MASK_RESP, SD_INFO2_MASK_ILA);
+
+	/* Step 2: DMA mode setup (same as _sd_single_read lines 499-509) */
 	if (hndl->trans_mode & SD_MODE_DMA_64) {
 		sState.dma64 = SD_MODE_DMA_64;
 		sd_outp(hndl, EXT_SWAP, 0x0100);
@@ -196,17 +206,28 @@ static void startSectorRead(void) {
 	else {
 		sState.dma64 = SD_MODE_DMA;
 	}
+	sd_outp(hndl, CC_EXT_MODE, 2); /* enable DMA */
 
-	/* Enable DMA mode on the SDHI controller */
-	sd_outp(hndl, CC_EXT_MODE, 2);
-
-	/* Enable response interrupt */
-	_sd_set_int_mask(hndl, SD_INFO1_MASK_RESP, SD_INFO2_MASK_ILA);
-
-	/* Set command argument (sector/byte address) */
+	/* Step 3: Send CMD17 (same sequence as _sd_send_mcmd lines 270-283) */
 	_sd_set_arg(hndl, (unsigned short)(addr >> 16), (unsigned short)(addr & 0xFFFF));
 
-	/* Issue CMD17 (READ_SINGLE_BLOCK) */
+	/* Wait for clock divider ready */
+	{
+		int i;
+		for (i = 0; i < 10000; i++) {
+			if (sd_inp(hndl, SD_INFO2) & SD_INFO2_MASK_SCLKDIVEN) {
+				break;
+			}
+		}
+		if (i == 10000) {
+			/* Clock divider not ready — card/hardware issue */
+			hndl->error = SD_ERR_CBSY_ERROR;
+			sState.state = SD_STATE_ERROR;
+			return;
+		}
+	}
+
+	/* Issue CMD17 */
 	sd_outp(hndl, SD_CMD, CMD17);
 
 	sState.state = SD_STATE_CMD_SENT;
@@ -280,7 +301,7 @@ static void handleCmdResponse(void) {
 	/* Invalidate cache for read buffer (required before and after DMA) */
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
 	if (isRead) {
-		v7_dma_inv_range((intptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
+		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
 	}
 
 	/* Initialize DMAC */
@@ -337,7 +358,7 @@ static void handleAllEnd(void) {
 	/* Invalidate cache after read DMA */
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
 	if (isRead) {
-		v7_dma_inv_range((intptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
+		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
 	}
 
 	/* Clear All end bit and disable data transfer interrupts */
@@ -629,8 +650,9 @@ void sdAsyncISR(void) {
 
 	SDHNDL* hndl = sState.hndl;
 
-	/* Accumulate interrupt flags */
-	_sd_get_int(hndl);
+	/* Note: sd_int_handler() has already called _sd_get_int() which reads
+	 * and clears the hardware interrupt flags, accumulating them into
+	 * hndl->int_info1 and hndl->int_info2. We just read those fields. */
 
 	switch (sState.state) {
 	case SD_STATE_IDLE: {
@@ -703,13 +725,42 @@ static void sdAsyncKick(void) {
 		return; /* Already running */
 	}
 
-	/* Manually trigger the ISR by calling it directly.
-	 * This is safe because we're called from task context with interrupts
-	 * enabled, and the ISR is designed to be re-entrant-safe (it only
-	 * reads/writes its own state and SDHI registers). */
-	UBaseType_t savedInterruptStatus = taskENTER_CRITICAL_FROM_ISR();
-	sdAsyncISR();
-	taskEXIT_CRITICAL_FROM_ISR(savedInterruptStatus);
+	/* TEMPORARY DIAGNOSTIC: Instead of using our ISR state machine,
+	 * do a synchronous single-sector read using sd_read_sect to verify
+	 * the hardware works. If this succeeds, our ISR register sequence
+	 * is the problem. Process the first request from whichever queue
+	 * has work. */
+	bool isFast;
+	SdRequest* req = pickNextRequest(&isFast);
+	if (req == NULL) {
+		return;
+	}
+
+	/* Temporarily disable async so sd_read_sect uses the semaphore path */
+	sState.active = false;
+
+	if (req->type == SD_REQ_WRITE) {
+		int err = sd_write_sect(sState.hndl->sd_port, req->buffer, req->sector, req->sectorCount, 0x0001u);
+		completeRequest(req, err);
+	}
+	else {
+		int err = sd_read_sect(sState.hndl->sd_port, req->buffer, req->sector, req->sectorCount);
+		completeRequest(req, err);
+	}
+
+	if (isFast) {
+		fastQueueDequeue();
+	}
+	else {
+		slowQueueDequeue();
+	}
+
+	sState.active = true;
+
+	/* Check if there's more work — recursively kick */
+	if (!fastQueueEmpty() || !slowQueueEmpty()) {
+		sdAsyncKick();
+	}
 }
 
 /* ========================================================================
@@ -732,7 +783,45 @@ void sdAsyncInit(void) {
 }
 
 void sdAsyncStart(void) {
+	extern void freezeWithError(const char* errmsg);
+
+	if (sState.hndl == NULL) {
+		freezeWithError("HNUL");
+	}
+
+	/* Do a synchronous dummy read to put the card in transfer state
+	 * with the clock running. This uses the old semaphore path
+	 * (active is still false). sd_read_sect internally:
+	 * 1. Enables clock (_sd_set_clock ENABLE)
+	 * 2. Sends CMD13 to verify card is in TRAN state
+	 * 3. Reads one sector
+	 * 4. Disables clock (_sd_set_clock DISABLE)
+	 *
+	 * We set active=true BEFORE the read returns so that step 4's
+	 * clock disable is blocked by our patch in sd_util.c.
+	 * The semaphore-based ISR path still works because we check
+	 * sdAsyncIsActive() in the ISR handler — but the flag is only
+	 * checked AFTER sd_int_handler accumulates flags, and the
+	 * semaphore give still happens in the else branch during this
+	 * transitional read.
+	 *
+	 * Actually, we can't do this — setting active=true while
+	 * sd_read_sect is running would cause the ISR to call
+	 * sdAsyncISR instead of giving the semaphore, which would
+	 * break the synchronous wait.
+	 *
+	 * Instead: just enable the clock manually and leave active=false
+	 * until after the read completes. Then set active=true. The
+	 * clock disable at the end of sd_read_sect will turn it off,
+	 * but we immediately re-enable it after. */
+	{
+		uint8_t dummyBuf[512];
+		sd_read_sect(sState.hndl->sd_port, dummyBuf, 0, 1);
+	}
+	/* Clock was just disabled by sd_read_sect. Re-enable it.
+	 * Now set active=true so it won't be disabled again. */
 	sState.active = true;
+	_sd_set_clock(sState.hndl, (int)sState.hndl->csd_tran_speed, SD_CLOCK_ENABLE);
 }
 
 bool sdAsyncIsActive(void) {
@@ -809,8 +898,37 @@ int32_t sdAsyncSyncRead(uint32_t sector, uint8_t* buffer, uint32_t sectorCount) 
 
 	sdAsyncKick();
 
-	/* Block until the ISR completes our request */
-	xSemaphoreTake(sem, portMAX_DELAY);
+	/* Block with timeout — if the ISR doesn't complete within 5 seconds,
+	 * show hardware state for diagnosis. */
+	if (xSemaphoreTake(sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
+		extern void freezeWithError(const char* errmsg);
+		extern volatile uint32_t sdAsyncISRCount;
+		SDHNDL* hndl = sState.hndl;
+
+		char buf[5];
+		unsigned short hw_info1 = sd_inp(hndl, SD_INFO1);
+		unsigned short clk = sd_inp(hndl, SD_CLK_CTRL);
+
+		/* First char: state indicator */
+		if (sdAsyncISRCount > 0) {
+			buf[0] = 'I'; /* ISR fired but state machine stuck */
+		}
+		else if (hw_info1 & 0x0001) {
+			buf[0] = 'R'; /* RESP flag set but interrupt not delivered */
+		}
+		else if (clk & 0x0100) {
+			buf[0] = 'S'; /* Clock on, no response — card not responding */
+		}
+		else {
+			buf[0] = 'C'; /* Clock off — fundamental issue */
+		}
+		/* Remaining: ISR count */
+		buf[1] = '0' + (sdAsyncISRCount / 100) % 10;
+		buf[2] = '0' + (sdAsyncISRCount / 10) % 10;
+		buf[3] = '0' + sdAsyncISRCount % 10;
+		buf[4] = 0;
+		freezeWithError(buf);
+	}
 
 	return result;
 }
@@ -839,7 +957,10 @@ int32_t sdAsyncSyncWrite(uint32_t sector, const uint8_t* buffer, uint32_t sector
 
 	sdAsyncKick();
 
-	xSemaphoreTake(sem, portMAX_DELAY);
+	if (xSemaphoreTake(sem, pdMS_TO_TICKS(5000)) != pdTRUE) {
+		extern void freezeWithError(const char* errmsg);
+		freezeWithError("SDTW"); /* SD async write timeout */
+	}
 
 	return result;
 }
