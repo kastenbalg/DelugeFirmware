@@ -22,6 +22,7 @@
 #include "model/model_stack.h"
 #include "model/song/song.h"
 #include "model/voice/voice.h"
+#include "modulation/params/param_manager.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/sound/sound.h"
 #include "processing/sound/sound_instrument.h"
@@ -64,15 +65,18 @@ bool voiceEventEnqueue(const VoiceEvent& event) {
  */
 /* Build a ModelStackWithSoundFlags from a Sound and InstrumentClip.
  * Used to reconstruct the ModelStack that noteOnPostArpeggiator and
- * noteOffPostArpeggiator expect, from the data stored in voice events. */
-static ModelStackWithSoundFlags* buildModelStack(char* memory, Sound* sound, InstrumentClip* clip) {
+ * noteOffPostArpeggiator expect, from the data stored in voice events.
+ * paramManager overrides clip->paramManager when non-null — needed for
+ * Kit NoteRows where the per-row paramManager differs from the clip's. */
+static ModelStackWithSoundFlags* buildModelStack(char* memory, Sound* sound, InstrumentClip* clip,
+                                                 ParamManager* paramManager = nullptr) {
 	if (currentSong == nullptr || sound == nullptr) {
 		return nullptr;
 	}
 	ModelStack* ms = (ModelStack*)memory;
 	ms->song = currentSong;
 
-	ParamManager* pm = (clip != nullptr) ? &clip->paramManager : nullptr;
+	ParamManager* pm = (paramManager != nullptr) ? paramManager : (clip != nullptr) ? &clip->paramManager : nullptr;
 
 	auto* ms3 = ms->addTimelineCounter(clip)->addOtherTwoThingsButNoNoteRow(sound, pm);
 	return ms3->addSoundFlags();
@@ -85,7 +89,8 @@ static void processVoiceEvent(const VoiceEvent& event) {
 		 * This runs in the audio task — isAudioTask() returns true,
 		 * so noteOnPostArpeggiator executes directly instead of re-enqueueing. */
 		char modelStackMemory[256]; /* ModelStack is small, stack-allocated */
-		ModelStackWithSoundFlags* msf = buildModelStack(modelStackMemory, event.sound, event.noteOn.clip);
+		ModelStackWithSoundFlags* msf =
+		    buildModelStack(modelStackMemory, event.sound, event.noteOn.clip, event.noteOn.paramManager);
 		if (msf != nullptr) {
 			event.sound->noteOnPostArpeggiator(msf, event.noteOn.noteCodePreArp, event.noteOn.noteCodePostArp,
 			                                   event.noteOn.velocity, event.noteOn.mpeValues,

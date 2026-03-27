@@ -27,6 +27,7 @@
 
 class Sound;
 class InstrumentClip;
+class ParamManager;
 
 /*
  * Voice Event Queue — the sole interface for requesting voice state changes.
@@ -87,7 +88,8 @@ struct VoiceEvent {
 	union {
 		// NOTE_ON
 		struct {
-			InstrumentClip* clip; // For ModelStack reconstruction
+			InstrumentClip* clip;       // For ModelStack reconstruction
+			ParamManager* paramManager; // Exact paramManager at enqueue time (NoteRow's for Kit drums)
 			int32_t noteCodePreArp;
 			int32_t noteCodePostArp;
 			int32_t velocity;
@@ -161,13 +163,15 @@ int32_t voiceEventProcessAll();
 
 /* ---- Convenience functions for common event types ---- */
 
-inline bool voiceEventNoteOn(Sound* sound, InstrumentClip* clip, int32_t noteCodePreArp, int32_t noteCodePostArp,
-                             int32_t velocity, const int16_t* mpeValues, uint32_t sampleSyncLength, int32_t ticksLate,
-                             uint32_t samplesLate, int32_t fromMIDIChannel) {
+inline bool voiceEventNoteOn(Sound* sound, InstrumentClip* clip, ParamManager* paramManager, int32_t noteCodePreArp,
+                             int32_t noteCodePostArp, int32_t velocity, const int16_t* mpeValues,
+                             uint32_t sampleSyncLength, int32_t ticksLate, uint32_t samplesLate,
+                             int32_t fromMIDIChannel) {
 	VoiceEvent ev{};
 	ev.type = VoiceEventType::NOTE_ON;
 	ev.sound = sound;
 	ev.noteOn.clip = clip;
+	ev.noteOn.paramManager = paramManager;
 	ev.noteOn.noteCodePreArp = noteCodePreArp;
 	ev.noteOn.noteCodePostArp = noteCodePostArp;
 	ev.noteOn.velocity = velocity;

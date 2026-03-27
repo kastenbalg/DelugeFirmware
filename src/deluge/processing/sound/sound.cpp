@@ -1598,9 +1598,9 @@ void Sound::noteOnPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t 
 	 * from the sequencer, app, or MIDI task, enqueue the event and return.
 	 * The audio task will process it on its next render cycle. */
 	if (!isAudioTask()) {
-		voiceEventNoteOn(this, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()), noteCodePreArp,
-		                 noteCodePostArp, velocity, mpeValues, sampleSyncLength, ticksLate, samplesLate,
-		                 fromMIDIChannel);
+		voiceEventNoteOn(this, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()),
+		                 modelStack->paramManager, noteCodePreArp, noteCodePostArp, velocity, mpeValues,
+		                 sampleSyncLength, ticksLate, samplesLate, fromMIDIChannel);
 		return;
 	}
 #endif
