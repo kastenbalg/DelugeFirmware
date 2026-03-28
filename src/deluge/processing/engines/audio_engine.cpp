@@ -79,6 +79,7 @@ namespace params = deluge::modulation::params;
 
 extern "C" {
 #include "RZA1/mtu/mtu.h"
+#include "RZA1/ostm/ostm.h"
 #include "drivers/ssi/ssi.h"
 
 #include "RZA1/intc/devdrv_intc.h"
@@ -121,14 +122,16 @@ int16_t zeroMPEValues[kNumExpressionDimensions] = {0, 0, 0};
 
 namespace AudioEngine {
 
-// used for culling. This can be high now since it's decoupled from the time between renders, and
-// will spill into a second render and output if needed so as long as we always render 128 samples in under 128/44100
-// seconds it will work maybe this should be user configurable? Values from 60-100 all seem justifiable. 100
-// occasionally crackles but means more voices. 60 keeps the modulation updating at about 800hz and LFO2 goes up to
-// 100ish
-constexpr int32_t numSamplesLimit = 80;
-// used for decisions in rendering engine
-constexpr int32_t direnessThreshold = numSamplesLimit - 30;
+// Half-buffer deadline in OSTM0 ticks (33.33 MHz).
+constexpr uint32_t kDeadlineTicks =
+    (uint32_t)((uint64_t)(SSI_TX_BUFFER_NUM_SAMPLES / 2) * DELUGE_CLOCKS_PER / kSampleRate);
+// Direness starts rising at 50% of the deadline
+constexpr uint32_t kDirenessThresholdTicks = kDeadlineTicks / 2;
+// Range over which direness maps linearly from 0 to kMaxDireness
+constexpr uint32_t kDirenessRangeTicks = kDeadlineTicks - kDirenessThresholdTicks;
+constexpr int32_t kMaxDireness = 14;
+// Direness level at which culling triggers (at buffer boundary)
+constexpr int32_t kCullDirenessThreshold = 10;
 
 // 7 can overwhelm SD bandwidth if we schedule the loads badly. It could be improved by starting future loads
 // earlier for now we provide an outlet in culling a single voice if we're under MIN_VOICES and still getting close
@@ -166,7 +169,10 @@ SampleRecorder* firstRecorder = nullptr;
 
 // Let's keep these grouped - the stuff we're gonna access regularly during audio rendering
 int32_t cpuDireness = 0;
-uint32_t timeDirenessChanged;
+// Smoothed direness scaled by 8 for EMA precision (actual direness = smoothedDireness8x >> 3)
+int32_t smoothedDireness8x = 0;
+// OSTM0 tick count at the start of the current render, readable by Song::renderAudio()
+uint32_t renderStartTicks = 0;
 uint32_t timeThereWasLastSomeReverb = 0x8FFFFFFF;
 int32_t numSamplesLastTime = 0;
 uint32_t nextVoiceState = 1;
@@ -449,65 +455,55 @@ extern uint16_t g_usb_usbmode;
 uint8_t numRoutines = 0;
 
 // not in header (private to audio engine)
-/// determines how many voices to cull based on num audio samples, current voices and numSamplesLimit
-void cullVoices(size_t numSamples, int32_t numAudio, int32_t numVoice) {
+/// Determines how many voices to cull based on measured direness (0–14 scale).
+/// Called at buffer boundary only. direness >= kCullDirenessThreshold to enter.
+void cullVoices(int32_t direness, int32_t numAudio, int32_t numVoice) {
 
 	bool culled = false;
-	// at high loads voicesStarted is limited to 2. Since starting voices is a heavy load and we know it's temporary
-	// we can be a bit more lenient with the limit
-	auto max_num_samples = numSamplesLimit + (20 * voices_started_this_render);
+	// Be more lenient if voices were just started this render (transient load)
+	int32_t effectiveThreshold = kCullDirenessThreshold + (voices_started_this_render > 0 ? 2 : 0);
+	int32_t direnessOver = direness - effectiveThreshold;
+
 	if (numAudio + numVoice > MIN_VOICES) {
-		static int32_t last_num_samples_over = 0;
+		static int32_t lastDirenessOver = 0;
 
-		int32_t num_samples_over_limit = numSamples - max_num_samples;
-		// If it's real dire, do a proper immediate cull
-		if (num_samples_over_limit >= 32) {
-			int32_t num_to_cull = (num_samples_over_limit >> 4);
+		// Hard cull: direness at max or very close (13-14)
+		if (direnessOver >= 3) {
+			int32_t num_to_cull = std::max(direnessOver >> 1, 1);
 
-			// leave at least 7 - below this point culling won't save us
-			// if they can't load their sample in time they'll stop the same way anyway
+			// leave at least MIN_VOICES
 			num_to_cull = std::min(num_to_cull, numAudio + numVoice - MIN_VOICES);
-			D_PRINTLN("Culling %d voices", num_to_cull);
+			D_PRINTLN("Culling %d voices, direness %d", num_to_cull, direness);
 
 			for (int32_t i = num_to_cull / 2; i < num_to_cull; i++) {
-				// cull with fast release
-				terminateOneVoice(numSamples);
+				terminateOneVoice(0);
 			}
 			for (int32_t i = 1; i < num_to_cull / 2; i++) {
-				// cull with immediate release
-				killOneVoice(numSamples);
+				killOneVoice(0);
 			}
-			forceReleaseOneVoice(numSamples);
+			forceReleaseOneVoice(0);
 
 #if ALPHA_OR_BETA_VERSION
-
 			definitelyLog = true;
 			logAction("hard cull");
-
 #endif
 			culled = true;
 		}
-
-		// Or if it's just a little bit dire, do a soft cull with fade-out, but only cull for sure if numSamples
-		// is increasing
-		else if (num_samples_over_limit >= 0) {
-			if (last_num_samples_over > 0 && num_samples_over_limit >= last_num_samples_over) {
-				forceReleaseOneVoice(numSamples);
+		// Soft cull: direness just over threshold and trending up
+		else if (direnessOver >= 0) {
+			if (lastDirenessOver > 0 && direnessOver >= lastDirenessOver) {
+				forceReleaseOneVoice(0);
 				logAction("soft cull");
-				if (numRoutines > 0) {
-					culled = true;
-					D_PRINTLN("culling in second routine");
-				}
+				culled = true;
 			}
 		}
-		last_num_samples_over = num_samples_over_limit;
+		lastDirenessOver = direnessOver;
 	}
 	else {
-		int32_t numSamplesOverLimit = numSamples - numSamplesLimit;
-		// Cull anyway if things are bad
-		if (numSamplesOverLimit >= 40) {
-			D_PRINTLN("under min voices but culling anyway");
-			terminateOneVoice(numSamples);
+		// Under MIN_VOICES but still at max direness — cull anyway
+		if (direness >= kMaxDireness) {
+			D_PRINTLN("under min voices but culling anyway, direness %d", direness);
+			terminateOneVoice(0);
 			culled = true;
 		}
 	}
@@ -522,52 +518,51 @@ void cullVoices(size_t numSamples, int32_t numAudio, int32_t numVoice) {
 
 // not in header (private to audio engine)
 /// set the direness level and cull any voices
-inline void setDireness(size_t numSamples) { // Consider direness and culling - before increasing the number of samples
-	// number of samples it took to do the last render
-	auto dspTime = (int32_t)(getAverageRunTimeForTask(routine_task_id) * 44100.);
-	size_t nonDSP = numSamples - dspTime;
-	// we don't care about the number that were rendered in the last go, only the ones taken by the first routine call
-	numSamples = std::max<int32_t>(dspTime - (int32_t)(numRoutines * numSamples), 0);
+/// Compute instantaneous direness from elapsed OSTM0 ticks since render start.
+/// Returns 0 when under 50% of deadline, linearly maps to 1–14 from 50%–100%.
+int32_t computeInstantDireness(uint32_t startTicks) {
+	uint32_t elapsed = getTimerValue(0) - startTicks; // unsigned subtraction handles wrap
+	if (elapsed <= kDirenessThresholdTicks) {
+		return 0;
+	}
+	uint32_t over = elapsed - kDirenessThresholdTicks;
+	int32_t direness = (int32_t)(over * kMaxDireness / kDirenessRangeTicks);
+	return std::min(direness, kMaxDireness);
+}
 
-	// don't smooth this - used for other decisions as well
-	if (numSamples >= direnessThreshold) {
+/// Update cpuDireness mid-render: can only rise, never fall within a single buffer.
+void updateDirenessMidRender() {
+	int32_t instant = computeInstantDireness(renderStartTicks);
+	if (instant > cpuDireness) {
+		cpuDireness = instant;
+	}
+}
 
-		int32_t newDireness = std::min<int32_t>(numSamples - (direnessThreshold - 1), 14);
+/// Post-render: run asymmetric EMA to set starting direness for next buffer,
+/// then check if culling is needed at buffer boundary.
+void updateDirenessPostRender() {
+	int32_t measured = computeInstantDireness(renderStartTicks);
 
-		if (newDireness >= cpuDireness) {
-			cpuDireness = newDireness;
-			timeDirenessChanged = audioSampleTimer;
-		}
+	// Asymmetric EMA on 8x-scaled value for sub-integer precision
+	int32_t measured8x = measured << 3;
+	if (measured8x > smoothedDireness8x) {
+		// Fast attack: ~50% step toward measured value
+		smoothedDireness8x += (measured8x - smoothedDireness8x + 1) >> 1;
+	}
+	else {
+		// Slow release: ~12.5% step toward measured value
+		smoothedDireness8x += (measured8x - smoothedDireness8x) >> 3;
+	}
+	smoothedDireness8x = std::clamp(smoothedDireness8x, 0, kMaxDireness << 3);
+
+	// Set starting direness for next buffer
+	cpuDireness = smoothedDireness8x >> 3;
+
+	// Culling at buffer boundary only
+	if (measured >= kCullDirenessThreshold && !bypassCulling) {
 		auto numAudio = currentSong ? currentSong->countAudioClips() : 0;
 		auto numVoice = getNumVoices();
-		if (!bypassCulling) {
-			cullVoices(numSamples, numAudio, numVoice);
-		}
-		else {
-
-			int32_t num_samples_over_limit = (int32_t)numSamples - numSamplesLimit;
-			if (num_samples_over_limit >= 0) {
-#if DO_AUDIO_LOG
-				definitelyLog = true;
-#endif
-				D_PRINTLN("numSamples %d, numVoice %d, numAudio %d", numSamples, numVoice, numAudio);
-				logAction("skipped cull");
-			}
-		}
-	}
-	// otherwise lower it (with some hysteresis to avoid jittering
-	else if (numSamples < direnessThreshold - 3) {
-
-		if ((int32_t)(audioSampleTimer - timeDirenessChanged) >= (kSampleRate >> 3)) { // Only if it's been long enough
-			timeDirenessChanged = audioSampleTimer;
-			cpuDireness--;
-			if (cpuDireness < 0) {
-				cpuDireness = 0;
-			}
-			else {
-				D_PRINTLN("direness:  %d", cpuDireness);
-			}
-		}
+		cullVoices(measured, numAudio, numVoice);
 	}
 }
 
@@ -605,7 +600,13 @@ constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 
 	numSamplesLastTime = numSamples;
 
+	// Record start time for mid-render and post-render direness updates
+	renderStartTicks = getTimerValue(0);
+
 	renderAudio(numSamples);
+
+	// Update direness EMA and check culling at buffer boundary
+	updateDirenessPostRender();
 
 	/* MIDI/gate output scheduling — for now pass defaults.
 	 * Step 7 will move clock output to the sequencer task via Timer 2. */

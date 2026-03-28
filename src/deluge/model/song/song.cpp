@@ -2425,6 +2425,11 @@ void Song::renderAudio(std::span<StereoSample> outputBuffer, int32_t* reverbBuff
 			                     !isClipActiveNow, isClipActiveNow);
 		}
 		ENABLE_INTERRUPTS();
+
+		// Update direness mid-render — can only rise, not fall within a buffer.
+		// Later outputs get cheaper rendering paths if earlier ones consumed the budget.
+		AudioEngine::updateDirenessMidRender();
+
 #if DO_AUDIO_LOG
 		char buf[64];
 		snprintf(buf, sizeof(buf), "complete: %s", output->name.get());

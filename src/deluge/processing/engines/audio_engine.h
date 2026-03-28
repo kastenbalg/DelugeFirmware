@@ -196,6 +196,8 @@ extern bool bypassCulling;
 extern uint32_t i2sTXBufferPos;
 extern uint32_t i2sRXBufferPos;
 extern int32_t cpuDireness;
+extern uint32_t renderStartTicks;
+void updateDirenessMidRender();
 extern InputMonitoringMode inputMonitoringMode;
 extern bool audioRoutineLocked; // Legacy — use audioMutexLock()/audioMutexUnlock() under FreeRTOS
 void audioMutexLock();
