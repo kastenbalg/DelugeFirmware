@@ -497,7 +497,7 @@ static void handleSectorDone(void) {
 					sState.currentIsFast = false;
 					sState.currentSector = slowReq->sector;
 					sState.currentBuffer = slowReq->buffer;
-					sState.sectorsRemaining = 1; /* Just one slow sector */
+					sState.sectorsRemaining = slowReq->sectorCount;
 					sState.fastCounter = 0;
 
 					/* Start the slow sector */
@@ -512,23 +512,16 @@ static void handleSectorDone(void) {
 			}
 		}
 		else {
-			/* We just did a slow sector (interleaved). Check if the slow
-			 * request has more sectors. */
-			SdRequest* slowReq = slowQueuePeek();
-			if (slowReq != NULL) {
-				/* Advance the slow request's state in the queue entry */
-				slowReq->sector++;
-				slowReq->buffer += 512;
-				slowReq->sectorCount--;
+			/* We just did one slow sector. Save progress back to the queue
+			 * entry — symmetric with how the fast path saves its state when
+			 * pausing for an interleaved slow sector. This keeps the entry
+			 * valid for the next interleave step or if we continue slow. */
+			SdRequest* slowReq = sState.currentReq;
+			slowReq->sector = sState.currentSector;
+			slowReq->buffer = sState.currentBuffer;
+			slowReq->sectorCount = sState.sectorsRemaining;
 
-				if (slowReq->sectorCount == 0) {
-					/* Slow request fully done */
-					completeRequest(slowReq, 0);
-					slowQueueDequeue();
-				}
-			}
-
-			/* Switch back to fast path if there's a pending fast request */
+			/* Switch back to fast path if a request is waiting */
 			SdRequest* fastReq = fastQueuePeek();
 			if (fastReq != NULL) {
 				sState.currentReq = fastReq;
@@ -546,25 +539,15 @@ static void handleSectorDone(void) {
 				return;
 			}
 
-			/* No fast request — continue with more slow sectors if any */
-			slowReq = slowQueuePeek();
-			if (slowReq != NULL && slowReq->sectorCount > 0) {
-				sState.currentReq = slowReq;
-				sState.currentSector = slowReq->sector;
-				sState.currentBuffer = slowReq->buffer;
-				sState.sectorsRemaining = slowReq->sectorCount;
-
-				if (slowReq->type == SD_REQ_WRITE) {
-					startSectorWrite();
-				}
-				else {
-					startSectorRead();
-				}
-				return;
+			/* No fast request — continue slow. sState already points to
+			 * the next sector; sectorsRemaining > 0 is guaranteed by the
+			 * enclosing if. */
+			if (sState.currentReq->type == SD_REQ_WRITE) {
+				startSectorWrite();
 			}
-
-			/* Nothing left */
-			sState.state = SD_STATE_IDLE;
+			else {
+				startSectorRead();
+			}
 			return;
 		}
 
