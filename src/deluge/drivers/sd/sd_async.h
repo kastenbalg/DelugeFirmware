@@ -118,6 +118,25 @@ int32_t sdAsyncSyncWrite(uint32_t sector, const uint8_t* buffer, uint32_t sector
 bool sdAsyncIsActive(void);
 int sdAsyncGetState(void); /* Returns current SdAsyncState as int, for diagnostics */
 
+/* ---- Cluster completion ring buffer ----
+ * Lock-free SPSC ring: ISR pushes completed cluster reads,
+ * sequencer task pops and does post-processing (format conversion,
+ * boundary stitching, marking loaded). */
+typedef struct {
+	void* cluster;  /* Cluster* (void* because this is C) */
+	int32_t result; /* 0 = success, nonzero = error */
+} SdClusterCompletion;
+
+#define SD_CLUSTER_COMPLETION_SIZE 16
+
+/* Pop a completed cluster read. Returns true if an entry was available.
+ * Called from sequencer task context (not ISR). */
+bool sdAsyncCompletionPop(SdClusterCompletion* out);
+
+/* Push a completed cluster into the ring. Called from ISR context
+ * (via the fast-path completion callback). */
+void sdAsyncCompletionPushFromCallback(void* cluster, int32_t result);
+
 #ifdef __cplusplus
 }
 #endif

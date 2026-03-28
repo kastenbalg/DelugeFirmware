@@ -20,6 +20,7 @@
 #include "definitions_cxx.hpp"
 #include "model/clip/clip.h"
 #include "model/clip/instrument_clip.h"
+#include "model/drum/drum.h"
 #include "model/note/note.h"
 #include "model/note/note_row.h"
 #include "model/note/note_vector.h"
@@ -29,6 +30,7 @@
 #include "model/song/song.h"
 #include "playback/playback_handler.h"
 #include "processing/sound/sound.h"
+#include "processing/sound/sound_drum.h"
 #include "processing/sound/sound_instrument.h"
 #include "processing/source.h"
 #include "storage/audio/audio_file_manager.h"
@@ -37,10 +39,87 @@
 
 extern Song* currentSong;
 
-/* Default look-ahead: ~32ms worth of ticks (covers ~2 cluster load times).
- * At 120 BPM with standard tick resolution, this is roughly 150-300 ticks.
- * We use a conservative fixed value that works across tempos. */
-static constexpr int32_t kDefaultLookAheadTicks = 500;
+/* ========================================================================
+ * Prefetch hint ring buffer: audio task → sequencer task.
+ * Lock-free SPSC. Audio writes hints when voices cross cluster boundaries;
+ * sequencer drains them and enqueues clusters ahead of active voice positions.
+ * ======================================================================== */
+
+struct ClusterPrefetchHint {
+	Sample* sample;
+	int32_t clusterIndex;
+	int8_t playDirection; /* +1 forward, -1 reverse */
+};
+
+static constexpr int32_t kPrefetchHintSize = 16;
+static ClusterPrefetchHint sPrefetchHints[kPrefetchHintSize];
+static volatile uint32_t sPrefetchHintHead = 0; /* audio task writes */
+static volatile uint32_t sPrefetchHintTail = 0; /* sequencer reads */
+
+void clusterPrefetchHintPush(Sample* sample, int32_t clusterIndex, int8_t playDirection) {
+	uint32_t next = (sPrefetchHintHead + 1) % kPrefetchHintSize;
+	if (next == sPrefetchHintTail) {
+		return; /* Ring full — drop (shouldn't happen at ~once per 93ms per voice) */
+	}
+	sPrefetchHints[sPrefetchHintHead].sample = sample;
+	sPrefetchHints[sPrefetchHintHead].clusterIndex = clusterIndex;
+	sPrefetchHints[sPrefetchHintHead].playDirection = playDirection;
+	__asm__ volatile("dmb" ::: "memory");
+	sPrefetchHintHead = next;
+}
+
+/**
+ * Prefetch clusters by index (rather than byte position).
+ * Enqueues `count` clusters starting from `startClusterIndex` in the given direction.
+ */
+static int32_t prefetchClustersFromIndex(Sample* sample, int32_t startClusterIndex, int8_t direction, int32_t count) {
+	int32_t clustersEnqueued = 0;
+	int32_t numClusters = sample->clusters.getNumElements();
+
+	for (int32_t i = 0; i < count; i++) {
+		int32_t idx = startClusterIndex + i * direction;
+		if (idx < 0 || idx >= numClusters) {
+			break;
+		}
+
+		SampleCluster* sc = sample->clusters.getElement(idx);
+		if (sc == nullptr) {
+			break;
+		}
+
+		if (sc->cluster == nullptr) {
+			sc->getCluster(sample, idx, CLUSTER_ENQUEUE, 0);
+			clustersEnqueued++;
+		}
+	}
+
+	return clustersEnqueued;
+}
+
+/**
+ * Drain the prefetch hint ring and enqueue clusters ahead of active voices.
+ * This is "tier 1" prefetching — highest priority because these clusters
+ * are needed within ~93ms (one cluster's worth of audio).
+ */
+static void drainPrefetchHints() {
+	while (sPrefetchHintTail != sPrefetchHintHead) {
+		__asm__ volatile("dmb" ::: "memory");
+		const ClusterPrefetchHint& hint = sPrefetchHints[sPrefetchHintTail];
+
+		/* moveOnToNextCluster() already enqueued hint.clusterIndex reactively.
+		 * We prefetch BEYOND that — starting from clusterIndex + playDirection. */
+		int32_t startCluster = hint.clusterIndex + hint.playDirection;
+		prefetchClustersFromIndex(hint.sample, startCluster, hint.playDirection, 2);
+
+		sPrefetchHintTail = (sPrefetchHintTail + 1) % kPrefetchHintSize;
+	}
+}
+
+/* Default look-ahead for upcoming note prefetch.
+ * Internal tick resolution is 24 ticks/QN scaled by magnitude (default mag 2 → 96 ticks/QN).
+ * At 120 BPM: 64 ticks ≈ 333ms — ample time to load a cluster before a note fires.
+ * Active voice positions are handled separately via the prefetch hint ring. */
+static constexpr int32_t kDefaultLookAheadTicks = 64;
 
 /* Maximum NoteRows to scan per call to limit sequencer CPU usage. */
 static constexpr int32_t kMaxNoteRowsPerScan = 16;
@@ -120,6 +199,10 @@ static int32_t prefetchForSource(Source& source, int32_t noteCode, int32_t trans
 }
 
 void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
+	/* Tier 1: Drain active voice hints (highest priority).
+	 * These represent clusters needed within ~93ms by currently-playing voices. */
+	drainPrefetchHints();
+
 	if (currentSong == nullptr) {
 		return;
 	}
@@ -132,6 +215,7 @@ void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
 		lookAheadTicks = kDefaultLookAheadTicks;
 	}
 
+	/* Tier 2: Scan upcoming note starts for initial cluster prefetch. */
 	int32_t clustersEnqueued = 0;
 	int32_t noteRowsScanned = 0;
 
@@ -154,17 +238,19 @@ void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
 
 		InstrumentClip* iclip = static_cast<InstrumentClip*>(clip);
 		Output* output = iclip->output;
-		if (output == nullptr || output->type != OutputType::SYNTH) {
+		if (output == nullptr || (output->type != OutputType::SYNTH && output->type != OutputType::KIT)) {
 			continue;
 		}
 
-		/* SoundInstrument inherits from both Sound and MelodicInstrument (→ Output).
-		 * Cast through the correct hierarchy. */
-		SoundInstrument* soundInst = static_cast<SoundInstrument*>(output);
-		Sound* sound = static_cast<Sound*>(soundInst);
-		/* No synth-mode filter here — a synth can mix FM and sample sources.
-		 * prefetchForSource() checks each source's oscType individually and
-		 * skips non-SAMPLE oscillators. */
+		bool isKit = (output->type == OutputType::KIT);
+
+		/* For Synth: cast to Sound for source access.
+		 * For Kit: each NoteRow has its own SoundDrum with sources. */
+		Sound* clipSound = nullptr;
+		if (!isKit) {
+			SoundInstrument* soundInst = static_cast<SoundInstrument*>(output);
+			clipSound = static_cast<Sound*>(soundInst);
+		}
 
 		/* Current playback position in this clip */
 		int32_t currentPos = iclip->lastProcessedPos;
@@ -184,12 +270,23 @@ void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
 				continue;
 			}
 
+			/* For Kit: get the Sound from the NoteRow's drum */
+			Sound* sound = clipSound;
+			if (isKit) {
+				Drum* drum = noteRow->drum;
+				if (drum == nullptr || drum->type != DrumType::SOUND) {
+					continue;
+				}
+				sound = static_cast<SoundDrum*>(drum);
+			}
+			if (sound == nullptr) {
+				continue;
+			}
+
 			noteRowsScanned++;
 
 			/* Binary search for the next note at or after currentPos */
 			int32_t searchPos = currentPos;
-			/* Handle wrapping: if searchEnd > clipLength, we need to check
-			 * both the remainder of the clip and the wrapped portion. */
 
 			int32_t noteIndex = noteRow->notes.search(searchPos, GREATER_OR_EQUAL);
 			int32_t numNotes = noteRow->notes.getNumElements();
@@ -210,8 +307,7 @@ void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
 					break;
 				}
 
-				/* Check if this note is within our look-ahead window.
-				 * Account for wrapping by checking distance modulo clipLength. */
+				/* Check if this note is within our look-ahead window. */
 				int32_t notePos = note->pos;
 				int32_t distance = notePos - currentPos;
 				if (distance < 0) {
@@ -223,7 +319,8 @@ void prefetchUpcomingSampleClusters(int32_t lookAheadTicks) {
 				}
 
 				/* This note will fire soon — prefetch its sample clusters.
-				 * Resolve noteRow's note code through the Sound's source(s). */
+				 * For Synth: resolve through Sound's sources.
+				 * For Kit: each NoteRow's SoundDrum has its own sources. */
 				int32_t noteCode = noteRow->getNoteCode();
 
 				for (int32_t s = 0; s < kNumSources && clustersEnqueued < kMaxClustersPerScan; s++) {

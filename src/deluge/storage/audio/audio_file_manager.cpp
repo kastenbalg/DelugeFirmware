@@ -917,12 +917,9 @@ audioFileError:
 bool AudioFileManager::loadCluster(Cluster& cluster, int32_t minNumReasonsAfter) {
 
 #ifdef USE_FREERTOS
-	/* Under FreeRTOS, the dedicated cluster loader task calls this.
-	 * SD card serialization is handled by sdCardMutex in diskio.c.
-	 * Only keep the clusterBeingLoaded re-entrancy check. */
-	if (clusterBeingLoaded != nullptr) {
-		return false;
-	}
+	/* Under FreeRTOS, the ISR serializes all SD card access.
+	 * No boolean guards needed — loadCluster submits to the ISR
+	 * queue and blocks until completion. */
 #else
 	if (currentlyAccessingCard) {
 		return false;
@@ -933,10 +930,10 @@ bool AudioFileManager::loadCluster(Cluster& cluster, int32_t minNumReasonsAfter)
 	if (AudioEngine::audioMutexIsLocked()) {
 		return false;
 	}
-#endif
 
 	clusterBeingLoaded = &cluster;
 	minNumReasonsForClusterBeingLoaded = minNumReasonsAfter + 1;
+#endif
 
 	Sample* sample = cluster.sample;
 
@@ -961,7 +958,9 @@ bool AudioFileManager::loadCluster(Cluster& cluster, int32_t minNumReasonsAfter)
 
 	if (false) {
 getOutEarly:
+#ifndef USE_FREERTOS
 		clusterBeingLoaded = nullptr;
+#endif
 		removeReasonFromCluster(cluster, "E033");
 		return false;
 	}
@@ -1016,8 +1015,7 @@ getOutEarly:
 		 * until the ISR state machine completes it. The ISR interleaves
 		 * this with slow-path FatFS reads at the sector level (N:1 ratio).
 		 *
-		 * The callback notifies the cluster loader task handle. */
-		extern TaskHandle_t clusterLoaderTaskHandle;
+		 * The callback notifies the calling task via task notification. */
 		volatile int32_t asyncResult = -1;
 
 		/* Clear any pending notifications before we submit */
@@ -1117,13 +1115,53 @@ getOutEarly:
 		goto getOutEarly;
 	}
 
-	cluster.convertDataIfNecessary();
-
 #if ALPHA_OR_BETA_VERSION
 	if (cluster.numReasonsToBeLoaded < minNumReasonsAfter + 1) {
 		FREEZE_WITH_ERROR("i040"); // It's +1 because we haven't removed this function's "reason" yet.
 	}
 #endif
+
+	postProcessLoadedCluster(cluster);
+
+#ifndef USE_FREERTOS
+	clusterBeingLoaded = NULL;
+#endif
+
+#if ALPHA_OR_BETA_VERSION
+	if (cluster.numReasonsToBeLoaded < minNumReasonsAfter) {
+		FREEZE_WITH_ERROR("i037");
+	}
+	if (cluster.sample->clusters.getElement(cluster.clusterIndex)->cluster != &cluster) {
+		FREEZE_WITH_ERROR("E438");
+	}
+#endif
+
+	return true;
+}
+
+/*
+ * Post-process a cluster after its data has been read from SD.
+ * Performs format conversion, cross-cluster boundary stitching,
+ * marks the cluster as loaded, and releases the loading reason.
+ *
+ * Called from:
+ * - loadCluster() for the CLUSTER_LOAD_IMMEDIATELY blocking path
+ * - The sequencer task for async cluster reads (via drainClusterCompletions)
+ */
+bool AudioFileManager::postProcessLoadedCluster(Cluster& cluster) {
+	Sample* sample = cluster.sample;
+	int32_t clusterIndex = cluster.clusterIndex;
+
+#if ALPHA_OR_BETA_VERSION
+	if (!sample) {
+		FREEZE_WITH_ERROR("E208");
+	}
+	if (cluster.type != Cluster::Type::SAMPLE) {
+		FREEZE_WITH_ERROR("E207");
+	}
+#endif
+
+	cluster.convertDataIfNecessary();
 
 	int32_t misalignment = sample->audioDataStartPosBytes & 0b11;
 
@@ -1147,8 +1185,6 @@ getOutEarly:
 					int32_t bytesUnconvertedBeforeCluster = bytesBeforeStartOfCluster % 3;
 					if (bytesUnconvertedBeforeCluster) {
 
-						// There'll be one word in there which hasn't yet been converted. Do it now. (We've probably
-						// just copied over the next one and a bit, which already was converted)
 						int32_t startPos = Cluster::size - bytesUnconvertedBeforeCluster;
 						uint8_t* thisNumber = (uint8_t*)&prevCluster->data[startPos];
 
@@ -1156,8 +1192,6 @@ getOutEarly:
 						thisNumber[0] = thisNumber[2];
 						thisNumber[2] = temp;
 
-						// And now, copy 2 bytes back to this Cluster (that's the maximum that the float could have
-						// been overhanging the boundary)
 						memcpy(cluster.data, &prevCluster->data[Cluster::size], 2);
 					}
 
@@ -1168,21 +1202,13 @@ getOutEarly:
 			// Or, all other types of raw data conversion
 			else if (sample->rawDataFormat != RawDataFormat::NATIVE) {
 
-				// If we haven't previously written the "extra" bytes to the end of the prev Cluster and converted
-				// them, do so now...
 				if (!prevCluster->extraBytesAtEndConverted) {
 
-					// If misaligned from the 4-byte boundary
 					if (misalignment) {
-
-						// There'll be one word in there which hasn't yet been converted. Do it now. (We've probably
-						// also just moved over the next one too, which already was converted)
 						int32_t startPos = Cluster::size - 4 + misalignment;
 						auto& thisNumber = reinterpret_cast<int32_t&>(prevCluster->data[startPos]);
 						thisNumber = sample->convertToNative(thisNumber);
 
-						// And now, copy 3 bytes back to this Cluster (that's the maximum that the float could have
-						// been overhanging the boundary)
 						memcpy(cluster.data, &prevCluster->data[Cluster::size], 3);
 					}
 
@@ -1207,47 +1233,29 @@ getOutEarly:
 				    (clusterIndex + 1) * Cluster::size - sample->audioDataStartPosBytes;
 				int32_t bytesUnconvertedBeforeNextCluster = bytesBeforeStartOfNextCluster % 3;
 
-				// If one word missed conversion...
 				if (bytesUnconvertedBeforeNextCluster) {
 
-					// If we had't previously converted the first couple of bytes of the next Cluster...
 					if (!nextCluster->extraBytesAtStartConverted) {
-
-						// We first copy the next Cluster first 7 bytes to the end of this Cluster
 						memcpy(&cluster.data[Cluster::size], nextCluster->data, 7);
 					}
-
-					// Or, if we *had* previously converted the first bytes of the next Cluster...
 					else {
-
-						// Grab the unconverted bytes back from where we backed them up to
 						memcpy(&cluster.data[Cluster::size], nextCluster->firstThreeBytesPreDataConversion, 2);
 					}
 
-					// There'll be one word in there which hasn't yet been converted. Do it now. (We've probably
-					// just copied over the next one and a bit, which already was converted)
 					uint8_t* thisNumber = (uint8_t*)&cluster.data[Cluster::size - bytesUnconvertedBeforeNextCluster];
 
 					uint8_t temp = thisNumber[0];
 					thisNumber[0] = thisNumber[2];
 					thisNumber[2] = temp;
 
-					// If we had't previously converted the first couple of bytes of the next Cluster, do so now...
 					if (!nextCluster->extraBytesAtStartConverted) {
 						nextCluster->extraBytesAtStartConverted = true;
-
-						// And now, copy 2 bytes back to the next Cluster (that's the maximum that the 24-bit
-						// int32_t could have been overhanging the boundary)
 						memcpy(nextCluster->data, &cluster.data[Cluster::size], 2);
 					}
-
-					// Or, if we *had* previously converted the first bytes of the next Cluster...
 					else {
 						goto copy7ToMe;
 					}
 				}
-
-				// Or if no words missed conversion
 				else {
 					goto copy7ToMe;
 				}
@@ -1256,38 +1264,19 @@ getOutEarly:
 			// Or, all other types of raw data conversion
 			else if (sample->rawDataFormat != RawDataFormat::NATIVE) {
 
-				// If one word missed conversion...
 				if (misalignment) {
 					int32_t startPos = Cluster::size - 4 + misalignment;
 					auto& thisNumber = reinterpret_cast<int32_t&>(cluster.data[startPos]);
 
-					// If we had't previously converted the first couple of bytes of the next Cluster, do so now...
 					if (!nextCluster->extraBytesAtStartConverted) {
-
-						// We first copy the next Cluster first 7 bytes to the end of this Cluster
 						memcpy(&cluster.data[Cluster::size], nextCluster->data, 7);
-
-						// There'll be one word in there which hasn't yet been converted from float. Do it now
 						thisNumber = sample->convertToNative(thisNumber);
-
-						// And now, copy 3 bytes back to the next Cluster (that's the maximum that the float could
-						// have been overhanging the boundary)
 						memcpy(nextCluster->data, &cluster.data[Cluster::size], 3);
-
 						nextCluster->extraBytesAtStartConverted = true;
 					}
-
-					// Or, if we *had* previously converted the first bytes of the next Cluster...
 					else {
-
-						// Grab the unconverted bytes back from where we backed them up to
 						memcpy(&cluster.data[Cluster::size], nextCluster->firstThreeBytesPreDataConversion, 3);
-
-						// There'll be one word in there which hasn't yet been converted from float. Do it now
 						thisNumber = sample->convertToNative(thisNumber);
-
-						// And now just copy the converted-from-float first bytes from the next Cluster to the end
-						// of this one
 						goto copy7ToMe;
 					}
 				}
@@ -1298,7 +1287,6 @@ getOutEarly:
 
 			else {
 copy7ToMe:
-				// We copy the next Cluster's first 7 bytes to the end of this Cluster
 				memcpy(&cluster.data[Cluster::size], nextCluster->data, 7);
 			}
 
@@ -1308,17 +1296,7 @@ copy7ToMe:
 
 	cluster.loaded = true;
 
-	clusterBeingLoaded = NULL;
 	removeReasonFromCluster(cluster, "E034");
-
-#if ALPHA_OR_BETA_VERSION
-	if (cluster.numReasonsToBeLoaded < minNumReasonsAfter) {
-		FREEZE_WITH_ERROR("i037");
-	}
-	if (cluster.sample->clusters.getElement(cluster.clusterIndex)->cluster != &cluster) {
-		FREEZE_WITH_ERROR("E438");
-	}
-#endif
 
 	return true;
 }
@@ -1352,9 +1330,8 @@ uint16_t timeLastFinish;
 void AudioFileManager::loadAnyEnqueuedClusters(int32_t maxNum, bool mayProcessUserActionsBetween) {
 
 #ifdef USE_FREERTOS
-	/* Under FreeRTOS, the dedicated cluster loader task handles all cluster loading.
-	 * Just wake it up if there's work to do. */
-	clusterQueueNotifyLoader();
+	/* Under FreeRTOS, the sequencer task feeds the loading queue to the ISR
+	 * every ~1.45ms. No explicit wake needed — just return. */
 	return;
 #endif
 
@@ -1464,9 +1441,11 @@ performActionsAndGetOut:
 void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* errorCode, bool deletingSong) {
 	cluster.numReasonsToBeLoaded--;
 
+#ifndef USE_FREERTOS
 	if (&cluster == clusterBeingLoaded && cluster.numReasonsToBeLoaded < minNumReasonsForClusterBeingLoaded) {
 		FREEZE_WITH_ERROR("E041"); // Sven got this!
 	}
+#endif
 
 	// If it's now zero, it's become available
 	if (cluster.numReasonsToBeLoaded == 0) {
@@ -1524,57 +1503,6 @@ void AudioFileManager::thingFinishedLoading() {
 	thingTypeBeingLoaded = ThingType::NONE;
 }
 
-#ifdef USE_FREERTOS
-/* Diagnostic counter — how many times the loader wakes per measurement period */
-volatile uint32_t clusterLoaderWakeCount = 0;
-volatile uint32_t clusterLoaderLoadCount = 0;
-
-/*
- * Entry point for the dedicated cluster loader FreeRTOS task.
- * Blocks on task notifications, then drains the loading queue one cluster
- * at a time. Runs at priority 5 — above the app task (3) but below audio (7).
- */
-void AudioFileManager::clusterLoaderMain() {
-	for (;;) {
-		/* Block until a cluster is enqueued (or spurious wake) */
-		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-		clusterLoaderWakeCount++;
-
-		/* Drain the queue one cluster at a time */
-		while (true) {
-			if (cardEjected || cardDisabled) {
-				break;
-			}
-			if (!StorageManager::checkSDInitialized()) {
-				break;
-			}
-
-			Cluster* cluster = loadingQueue.getNext();
-			if (cluster == nullptr) {
-				break;
-			}
-
-			if (cluster->type != Cluster::Type::SAMPLE) {
-				FREEZE_WITH_ERROR("E235");
-			}
-
-			clusterLoaderLoadCount++;
-			bool success = loadCluster(*cluster);
-
-			if (!success) {
-				D_PRINTLN("loader: cluster load fail");
-				if (cluster->numReasonsToBeLoaded) {
-					if (cluster->type != Cluster::Type::SAMPLE) {
-						FREEZE_WITH_ERROR("E237");
-					}
-					loadingQueue.enqueueCluster(*cluster, 0xFFFFFFFF);
-					break; /* Avoid infinite retry loop */
-				}
-			}
-			/* No vTaskDelay needed — sdCardMutex contention with the app task
-			 * provides natural interleaving via priority inheritance. The loader
-			 * only blocks when the app task actually needs the card. */
-		}
-	}
-}
-#endif
+/* Cluster loader task removed — the sequencer now feeds the ISR from the
+ * loading queue via feedClusterReadsToISR() and post-processes completed
+ * reads via drainClusterCompletions(). See freertos_app.cpp. */

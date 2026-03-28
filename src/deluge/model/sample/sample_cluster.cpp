@@ -29,9 +29,11 @@ SampleCluster::~SampleCluster() {
 
 #if ALPHA_OR_BETA_VERSION
 		int32_t numReasonsToBeLoaded = cluster->numReasonsToBeLoaded;
+#ifndef USE_FREERTOS
 		if (cluster == audioFileManager.clusterBeingLoaded) {
 			numReasonsToBeLoaded--;
 		}
+#endif
 
 		if (numReasonsToBeLoaded) {
 			D_PRINTLN("uh oh, some reasons left...  %d", numReasonsToBeLoaded);

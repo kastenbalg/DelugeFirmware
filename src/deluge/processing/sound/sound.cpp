@@ -1505,6 +1505,17 @@ PatchCableAcceptance Sound::maySourcePatchToParam(PatchSource s, uint8_t p, Para
 void Sound::noteOn(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBase* arpeggiator, int32_t noteCodePreArp,
                    int16_t const* mpeValues, uint32_t sampleSyncLength, int32_t ticksLate, uint32_t samplesLate,
                    int32_t velocity, int32_t fromMIDIChannel) {
+#ifdef USE_FREERTOS
+	/* Under FreeRTOS, all arp + voice state lives on the audio task.
+	 * From any other task, enqueue a pre-arp event and return.
+	 * The audio task will run noteOn() with arp processing inline. */
+	if (!isAudioTask()) {
+		voiceEventPreArpNoteOn(this, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()),
+		                       modelStack->paramManager, arpeggiator, noteCodePreArp, mpeValues, sampleSyncLength,
+		                       ticksLate, samplesLate, velocity, fromMIDIChannel);
+		return;
+	}
+#endif
 
 	ParamManagerForTimeline* paramManager = (ParamManagerForTimeline*)modelStack->paramManager;
 
@@ -1568,6 +1579,13 @@ void Sound::noteOn(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBase* a
 }
 
 void Sound::noteOff(ModelStackWithThreeMainThings* modelStack, ArpeggiatorBase* arpeggiator, int32_t noteCode) {
+#ifdef USE_FREERTOS
+	if (!isAudioTask()) {
+		voiceEventPreArpNoteOff(this, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()),
+		                        modelStack->paramManager, arpeggiator, noteCode);
+		return;
+	}
+#endif
 	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStack->addSoundFlags();
 	ArpeggiatorSettings* arpSettings = getArpSettings();
 
@@ -1613,6 +1631,14 @@ void Sound::noteOnPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t 
 	if (!voices_.empty() && polyphonic != PolyphonyMode::POLY) [[unlikely]] {
 		for (auto it = voices_.begin(); it != voices_.end();) {
 			ActiveVoice& voice = *it;
+#ifdef USE_FREERTOS
+			// Under FreeRTOS, voices marked for deletion are still in voices_
+			// until cleanupDeletedVoices() runs. Skip them — they're zombies.
+			if (voice->shouldBeDeleted()) {
+				it++;
+				continue;
+			}
+#endif
 			// if it's not MONO, and the envelope is not in release and we're allowing note tails, this is a legato
 			// voice
 			if (polyphonic != PolyphonyMode::MONO && voice->envelopes[0].state < EnvelopeStage::RELEASE
@@ -1880,6 +1906,11 @@ void Sound::noteOffPostArpeggiator(ModelStackWithSoundFlags* modelStack, int32_t
 	ArpeggiatorSettings* arpSettings = getArpSettings();
 
 	for (const ActiveVoice& voice : voices_) {
+#ifdef USE_FREERTOS
+		if (voice->shouldBeDeleted()) {
+			continue;
+		}
+#endif
 		if ((voice->noteCodeAfterArpeggiation == noteCode || noteCode == ALL_NOTES_OFF)
 		    && voice->envelopes[0].state < EnvelopeStage::RELEASE) { // Don't bother if it's already "releasing"
 
@@ -2452,11 +2483,11 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 
 	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStack->addSoundFlags();
 
-#ifndef USE_FREERTOS
-	// Arpeggiator — under cooperative scheduler, runs inline during render.
-	// Under FreeRTOS, arp processing is handled entirely by the sequencer task
-	// via doTickForwardForArp() and advanceArpPhase(), which enqueue voice
-	// events through the voice event queue.
+	// Arpeggiator — runs inline during render on the audio task.
+	// The phase accumulator advances by the actual buffer size for
+	// sample-accurate gate timing. Under FreeRTOS, this is the sole
+	// location where arp->render() runs — doTickForwardForArp() handles
+	// tick-synced events via ARP_TICK voice events from the sequencer.
 
 	UnpatchedParamSet* unpatchedParams = paramManager->getUnpatchedParamSet();
 
@@ -2495,7 +2526,6 @@ void Sound::render(ModelStackWithThreeMainThings* modelStack, std::span<StereoSa
 		invertReversed = false;
 	}
 	process_postarp_notes(modelStackWithSoundFlags, arpSettings, instruction);
-#endif
 
 	// Setup delay
 	Delay::State delayWorkingState{};
@@ -4770,6 +4800,17 @@ void Sound::prepareForHibernation() {
 
 // This can get called either for hibernation, or because drum now has no active noteRow
 void Sound::wontBeRenderedForAWhile() {
+#ifdef USE_FREERTOS
+	/* This function touches audio state (delay buffers, voices, arp, sidechain,
+	 * modfx). Under FreeRTOS, only the audio task may safely do this.
+	 * From any other task, enqueue KILL_SOUND and block until the audio task
+	 * has completed the full cleanup. Callers (e.g. preset switch) need this
+	 * to be synchronous — they expect the Sound fully torn down on return. */
+	if (!isAudioTask()) {
+		voiceEventKillSoundSync(this);
+		return;
+	}
+#endif
 	ModControllableAudio::wontBeRenderedForAWhile();
 
 	killAllVoices(); // Can't remember if this is always necessary, but it is when this is called from
@@ -4781,7 +4822,6 @@ void Sound::wontBeRenderedForAWhile() {
 	// Tell it to just cut the MODFX tail - we needa change status urgently!
 	reassessRenderSkippingStatus(nullptr, true);
 
-	// If it still thinks it's meant to be rendering, we did something wrong
 	if (ALPHA_OR_BETA_VERSION && !skippingRendering) {
 		FREEZE_WITH_ERROR("E322");
 	}
@@ -4916,7 +4956,11 @@ ModelStackWithAutoParam* Sound::getParamFromMIDIKnob(MIDIKnob& knob, ModelStackW
 }
 
 const Sound::ActiveVoice& Sound::acquireVoice() noexcept(false) {
-	if (voices_.size() >= maxVoiceCount) {
+	/* Count only live voices — exclude zombies awaiting cleanup so they
+	 * don't inflate the count and trigger premature voice stealing. */
+	size_t liveCount =
+	    std::count_if(voices_.begin(), voices_.end(), [](const ActiveVoice& v) { return !v->shouldBeDeleted(); });
+	if (liveCount >= maxVoiceCount) {
 		this->terminateOneActiveVoice();
 	}
 
@@ -4943,6 +4987,10 @@ void Sound::freeActiveVoice(const ActiveVoice& voice, ModelStackWithSoundFlags* 
 	if (erase) {
 		std::erase(voices_, voice);
 	}
+}
+
+size_t Sound::numActiveVoices() const {
+	return std::count_if(voices_.begin(), voices_.end(), [](const ActiveVoice& v) { return !v->shouldBeDeleted(); });
 }
 
 void Sound::cleanupDeletedVoices() {
@@ -4976,7 +5024,9 @@ void Sound::killAllVoices() {
 }
 
 const Sound::ActiveVoice& Sound::getLowestPriorityVoice() const {
-	return *std::ranges::max_element(voices_);
+	/* Skip zombies — stealing a zombie would reconstruct a dead voice. */
+	auto live = voices_ | std::views::filter([](const ActiveVoice& v) { return !v->shouldBeDeleted(); });
+	return *std::ranges::max_element(live);
 }
 
 const Sound::ActiveVoice& Sound::stealOneActiveVoice() {
@@ -4999,14 +5049,20 @@ void Sound::terminateOneActiveVoice() {
 		return;
 	}
 
-	ActiveVoice* best = &voices_.front();
-	for (ActiveVoice& voice : voices_ | std::views::drop(1)) {
+	ActiveVoice* best = nullptr;
+	for (ActiveVoice& voice : voices_) {
+		// skip zombies awaiting cleanup
+		if (voice->shouldBeDeleted()) {
+			continue;
+		}
 		// skip voices which are already releasing faster than we're going to release them
 		if (voice->envelopes[0].state >= EnvelopeStage::FAST_RELEASE
 		    && voice->envelopes[0].fastReleaseIncrement >= SOFT_CULL_INCREMENT) {
 			continue;
 		}
-		best = (*best)->getPriorityRating() < voice->getPriorityRating() ? &voice : best;
+		if (best == nullptr || (*best)->getPriorityRating() < voice->getPriorityRating()) {
+			best = &voice;
+		}
 	}
 
 	if (best == nullptr) {
@@ -5026,14 +5082,24 @@ void Sound::forceReleaseOneActiveVoice() {
 		return;
 	}
 
-	ActiveVoice* best = &voices_.front();
-	for (ActiveVoice& voice : voices_ | std::views::drop(1)) {
+	ActiveVoice* best = nullptr;
+	for (ActiveVoice& voice : voices_) {
+		// skip zombies awaiting cleanup
+		if (voice->shouldBeDeleted()) {
+			continue;
+		}
 		// skip voices releasing faster than this - we'd rather release another voice
 		if (voice->envelopes[0].state >= EnvelopeStage::FAST_RELEASE
 		    && voice->envelopes[0].fastReleaseIncrement >= 4096) {
 			continue;
 		}
-		best = (*best)->getPriorityRating() < voice->getPriorityRating() ? &voice : best;
+		if (best == nullptr || (*best)->getPriorityRating() < voice->getPriorityRating()) {
+			best = &voice;
+		}
+	}
+
+	if (best == nullptr) {
+		return;
 	}
 
 	const ActiveVoice& voice = *best;

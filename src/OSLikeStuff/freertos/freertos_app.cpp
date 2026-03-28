@@ -30,6 +30,7 @@
 #ifdef USE_FREERTOS
 
 #include "FreeRTOS.h"
+#include "processing/engines/audio_engine.h"
 #include "semphr.h"
 #include "task.h"
 
@@ -61,16 +62,11 @@ static StackType_t sAppTaskStack[8192];
 static StaticTask_t sAudioTaskTCB;
 static StackType_t sAudioTaskStack[4096];
 
-/* Cluster loader task: loads sample clusters from SD card. 8KB stack. */
-static StaticTask_t sClusterLoaderTCB;
-static StackType_t sClusterLoaderStack[2048];
-
 /* Sequencer task: tick advancement, event scheduling, MIDI/CV I/O, UI. 16KB stack. */
 static StaticTask_t sSequencerTaskTCB;
 static StackType_t sSequencerTaskStack[4096];
 
 /* Global handles for task management */
-TaskHandle_t clusterLoaderTaskHandle = nullptr;
 TaskHandle_t audioTaskHandle = nullptr;
 TaskHandle_t sequencerTaskHandle = nullptr;
 
@@ -189,6 +185,11 @@ static void audioTaskFunction(void* pvParameters) {
 		 * Tick logic and I/O are handled by the sequencer task. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+		/* Clean up voices that the audio task marked for deletion during
+		 * the previous render cycle. Must happen before processing new
+		 * events so that zombie voices don't interfere with noteOn logic. */
+		AudioEngine::cleanupDeletedVoices();
+
 		/* Process all pending voice events before rendering.
 		 * This is where noteOn/noteOff/expression/kill events from the
 		 * sequencer, app, and MIDI tasks get applied to voice state.
@@ -201,13 +202,96 @@ static void audioTaskFunction(void* pvParameters) {
 }
 
 /* --------------------------------------------------------------------------
- * Cluster loader task: dedicated task for loading sample clusters from SD
+ * Cluster loading: ISR reads clusters, sequencer post-processes
  * -------------------------------------------------------------------------- */
+#include "drivers/sd/sd_async.h"
+#include "model/sample/sample.h"
+#include "model/sample/sample_cluster.h"
 #include "storage/audio/audio_file_manager.h"
+#include "storage/cluster/cluster.h"
 
-static void clusterLoaderTaskFunction(void* pvParameters) {
-	(void)pvParameters;
-	audioFileManager.clusterLoaderMain(); /* Infinite loop — never returns */
+/* ISR callback for async cluster reads. Pushes the completed cluster
+ * into the completion ring buffer for the sequencer to post-process. */
+static void clusterReadCompletionCallback(int32_t result, void* userData) {
+	/* Push to completion ring — sequencer drains via drainClusterCompletions() */
+	extern void sdAsyncCompletionPushFromCallback(void* cluster, int32_t result);
+	sdAsyncCompletionPushFromCallback(userData, result);
+}
+
+/*
+ * Feed pending cluster reads from the loading queue to the ISR fast queue.
+ * Called from the sequencer task each cycle (~1.45ms).
+ */
+static void feedClusterReadsToISR() {
+	if (!sdAsyncIsActive()) {
+		return;
+	}
+
+	while (true) {
+		Cluster* cluster = audioFileManager.loadingQueue.getNext();
+		if (cluster == nullptr) {
+			break;
+		}
+
+		Sample* sample = cluster->sample;
+		if (sample == nullptr) {
+			/* Invalid cluster — skip */
+			continue;
+		}
+
+		if (cluster->type != Cluster::Type::SAMPLE) {
+			continue;
+		}
+
+		int32_t clusterIndex = cluster->clusterIndex;
+		int32_t numSectors = Cluster::size >> 9;
+
+		/* Handle partial last cluster */
+		if (sample->audioDataLengthBytes && sample->audioDataLengthBytes != 0x8FFFFFFFFFFFFFFF) {
+			uint32_t audioDataEndPosBytes = sample->audioDataLengthBytes + sample->audioDataStartPosBytes;
+			uint32_t startByteThisCluster = clusterIndex << Cluster::size_magnitude;
+			int32_t bytesToRead = audioDataEndPosBytes - startByteThisCluster;
+			if (bytesToRead <= 0) {
+				continue;
+			}
+			if (bytesToRead < (int32_t)Cluster::size) {
+				numSectors = ((bytesToRead - 1) >> 9) + 1;
+			}
+		}
+
+		LBA_t startSector = sample->clusters.getElement(clusterIndex)->sdAddress;
+
+		/* Add a reason to prevent deallocation during async read */
+		cluster->addReason();
+
+		bool enqueued = sdAsyncReadCluster(startSector, (uint8_t*)cluster->data, numSectors,
+		                                   clusterReadCompletionCallback, (void*)cluster);
+
+		if (!enqueued) {
+			/* Fast queue full — put it back and try next cycle */
+			audioFileManager.removeReasonFromCluster(*cluster, "E033");
+			audioFileManager.loadingQueue.enqueueCluster(*cluster, 0xFFFFFFFF);
+			break;
+		}
+	}
+}
+
+/*
+ * Drain the ISR completion ring buffer and post-process completed clusters.
+ * Called from the sequencer task each cycle (~1.45ms).
+ */
+static void drainClusterCompletions() {
+	SdClusterCompletion comp;
+	while (sdAsyncCompletionPop(&comp)) {
+		Cluster* cluster = (Cluster*)comp.cluster;
+		if (comp.result == 0) {
+			audioFileManager.postProcessLoadedCluster(*cluster);
+		}
+		else {
+			/* Read error — release the loading reason */
+			audioFileManager.removeReasonFromCluster(*cluster, "E033");
+		}
+	}
 }
 
 /* --------------------------------------------------------------------------
@@ -265,7 +349,6 @@ static void graphicsUpdate() {
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/engines/voice_event_queue.h"
-#include "processing/sound/sound_instrument.h"
 #include "storage/cluster/cluster_prefetch.h"
 
 #define TICK_TYPE_SWUNG 1
@@ -343,26 +426,6 @@ static void sequencerRoutine() {
 	playbackHandler.publishTempoState();
 }
 
-/* Advance the sample-based arp phase for all active SoundInstruments.
- * This replaces the arp processing that was inside Sound::render().
- * Called every sequencer cycle regardless of tick activity — the arp
- * phase accumulator must advance continuously to track gate timing. */
-static void advanceAllArpPhases() {
-	if (currentSong == nullptr) {
-		return;
-	}
-
-	char modelStackMemory[MODEL_STACK_MAX_SIZE];
-	ModelStack* modelStack = setupModelStackWithSong(modelStackMemory, currentSong);
-
-	for (Output* output = currentSong->firstOutput; output != nullptr; output = output->next) {
-		if (output->type == OutputType::SYNTH) {
-			SoundInstrument* sound = static_cast<SoundInstrument*>(output);
-			sound->advanceArpPhase(modelStack, kHalfBufferSamples);
-		}
-	}
-}
-
 extern volatile uint32_t allocMutexContentionCount;
 
 static void sequencerTaskFunction(void* pvParameters) {
@@ -379,20 +442,24 @@ static void sequencerTaskFunction(void* pvParameters) {
 		 * underrun from sequencer processing time. */
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-		/* Voice cleanup is handled by the audio task — it is the sole
-		 * owner of all voice objects. The sequencer only enqueues events. */
+		/* Post-process any clusters the ISR has finished reading since last cycle.
+		 * This does format conversion, boundary stitching, and marks them loaded. */
+		drainClusterCompletions();
+
+		/* Submit pending cluster reads from the loading queue to the ISR.
+		 * The ISR processes them autonomously between sequencer cycles. */
+		feedClusterReadsToISR();
 
 		sequencerRoutine();
 
-		/* Advance sample-based arp phase for all active sounds.
-		 * Must run every cycle (not just on ticks) because the arp's
-		 * phase accumulator tracks gate timing continuously. */
-		advanceAllArpPhases();
+		/* Arp phase advancement now happens on the audio task inside
+		 * Sound::render(). The sequencer sends ARP_TICK events for
+		 * tick-synced arp timing via doTickForwardForArp(). */
 
-		/* Prefetch sample clusters for notes that will fire soon.
-		 * This runs AFTER tick processing (which may have started new notes)
-		 * but BEFORE the audio task's next render. The cluster loader (pri 5)
-		 * runs after we block, giving it time to load before audio needs them. */
+		/* Prefetch sample clusters for upcoming notes and active voices.
+		 * Runs AFTER tick processing (which may have started new notes)
+		 * and AFTER feeding the ISR (so newly prefetched clusters get
+		 * submitted on the next cycle). */
 		prefetchUpcomingSampleClusters();
 
 		/* Graphics update every ~5th wake-up (~14.5ms) */
@@ -421,17 +488,9 @@ extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
 	                  3, /* Same priority for all non-audio, no time-slicing */
 	                  sAppTaskStack, &sAppTaskTCB);
 
-	/* Cluster loader task at priority 7 (same as audio).
-	 * Audio and loader use different hardware (SSI DMA vs SDHI DMA) and
-	 * can genuinely run in parallel. With configUSE_TIME_SLICING=0,
-	 * same-priority tasks don't preempt each other — the loader runs
-	 * whenever audio is sleeping on ulTaskNotifyTake, and sleeps on
-	 * the SDHI semaphore during SD transfers (freeing CPU for audio). */
-	clusterLoaderTaskHandle = xTaskCreateStatic(clusterLoaderTaskFunction, "ClusterLoader", 2048, NULL,
-	                                            configMAX_PRIORITIES - 1, /* Priority 7: same as audio */
-	                                            sClusterLoaderStack, &sClusterLoaderTCB);
-
-	/* Sequencer task at priority 6 — tick advancement, events, MIDI/CV I/O, UI graphics */
+	/* Sequencer task at priority 6 — tick advancement, events, MIDI/CV I/O, UI graphics.
+	 * Also handles cluster loading: feeds the ISR from the loading queue and
+	 * post-processes completed cluster reads (format conversion, boundary stitching). */
 	sequencerTaskHandle =
 	    xTaskCreateStatic(sequencerTaskFunction, "Sequencer", 4096, NULL, configMAX_PRIORITIES - 2, /* Priority 6 */
 	                      sSequencerTaskStack, &sSequencerTaskTCB);

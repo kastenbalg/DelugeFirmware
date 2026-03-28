@@ -353,14 +353,9 @@ void LoadSongUI::performLoad() {
 
 	deletedPartsOfOldSong = true;
 
-#ifdef USE_FREERTOS
-	/* Suspend the cluster loader for the entire song load process.
-	 * The loader competes for memory and SD card access during readFromFile,
-	 * causing allocation failures and intermittent crashes. It will be
-	 * resumed after the song is fully loaded or on error. */
-	extern TaskHandle_t clusterLoaderTaskHandle;
-	vTaskSuspend(clusterLoaderTaskHandle);
-#endif
+	/* Cluster loading continues during song load — the currently-playing song's
+	 * voices still need their clusters. The ISR interleaves cluster reads with
+	 * FatFS reads for the new song's XML parsing. */
 
 	// If not currently playing, don't load both songs at once (this avoids any RAM overfilling, fragmentation etc.)
 	if (!playbackHandler.isEitherClockActive()) {
@@ -396,10 +391,6 @@ someError:
 		display->displayError(error);
 		activeDeserializer->closeWriter();
 fail:
-#ifdef USE_FREERTOS
-		/* Ensure loader is resumed on any error path */
-		vTaskResume(clusterLoaderTaskHandle);
-#endif
 		// If we already deleted the old song, make a new blank one. This will take us back to InstrumentClipView.
 		if (!currentSong) {
 			// If we're here, it's most likely because of a file error. On paper, a RAM error could be possible too.
@@ -458,12 +449,6 @@ gotErrorAfterCreatingSong:
 	if (error != Error::NONE) {
 		goto gotErrorAfterCreatingSong;
 	}
-
-#ifdef USE_FREERTOS
-	/* Resume the cluster loader before sample loading — loadAllSamples will
-	 * enqueue clusters that the loader needs to process. */
-	vTaskResume(clusterLoaderTaskHandle);
-#endif
 
 	audioFileManager.thingBeginningLoading(ThingType::SONG);
 

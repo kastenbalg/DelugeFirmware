@@ -75,9 +75,6 @@ public:
 	void loadCrucialAudioFilesOnly() override;
 	void beenEdited(bool shouldMoveToEmptySlot = true) override;
 	int32_t doTickForwardForArp(ModelStack* modelStack, int32_t currentPos) override;
-#ifdef USE_FREERTOS
-	void advanceArpPhase(ModelStack* modelStack, size_t numSamples);
-#endif
 	void setupWithoutActiveClip(ModelStack* modelStack) override;
 	void getThingWithMostReverb(Sound** soundWithMostReverb, ParamManager** paramManagerWithMostReverb,
 	                            GlobalEffectableForClip** globalEffectableWithMostReverb,

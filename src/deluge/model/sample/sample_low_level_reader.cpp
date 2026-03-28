@@ -27,6 +27,7 @@
 #include "model/voice/voice_sample_playback_guide.h"
 #include "storage/audio/audio_file_manager.h"
 #include "storage/cluster/cluster.h"
+#include "storage/cluster/cluster_prefetch.h"
 
 void SampleLowLevelReader::unassignAllReasons(bool wontBeUsedAgain) {
 	for (int32_t l = 0; l < kNumClustersLoadedAhead; l++) {
@@ -382,6 +383,12 @@ bool SampleLowLevelReader::moveOnToNextCluster(SamplePlaybackGuide* guide, Sampl
 			        ->getCluster(sample, newClusterIndex, CLUSTER_ENQUEUE, priorityRating);
 
 			// If that failed (because no free RAM), no damage gets done.
+
+#ifdef USE_FREERTOS
+			/* Signal the sequencer's prefetch to load clusters BEYOND newClusterIndex.
+			 * This fires ~once per 93ms per voice (one cluster of audio at 16-bit stereo). */
+			clusterPrefetchHintPush(sample, newClusterIndex, guide->playDirection);
+#endif
 		}
 	}
 

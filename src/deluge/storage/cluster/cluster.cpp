@@ -122,7 +122,9 @@ void Cluster::convertDataIfNecessary() {
 				}
 
 				AudioEngine::logAction("from convert-data");
-				AudioEngine::runRoutine();
+#ifndef USE_FREERTOS
+				AudioEngine::runRoutine(); /* Under FreeRTOS, audio task preempts naturally */
+#endif
 			}
 		}
 
@@ -149,9 +151,11 @@ void Cluster::convertDataIfNecessary() {
 
 			for (; pos < endPos; pos++) {
 
+#ifndef USE_FREERTOS
 				if (!((uint32_t)pos & 0b1111111100)) {
 					AudioEngine::runRoutine();
 				}
+#endif
 
 				*pos = sample->convertToNative(*pos);
 			}

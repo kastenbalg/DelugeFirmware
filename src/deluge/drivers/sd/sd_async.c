@@ -127,6 +127,45 @@ static void fastQueueDequeue(void) {
 	sFastQueue.tail = (sFastQueue.tail + 1) % SD_FAST_QUEUE_SIZE;
 }
 
+/* ========================================================================
+ * Cluster completion ring buffer.
+ * ISR pushes completed cluster reads; sequencer task pops them for
+ * post-processing (format conversion, boundary stitching, marking loaded).
+ * Lock-free SPSC: ISR is sole producer, sequencer is sole consumer.
+ * ======================================================================== */
+
+static SdClusterCompletion sCompletionRing[SD_CLUSTER_COMPLETION_SIZE];
+static volatile uint32_t sCompletionHead; /* ISR writes */
+static volatile uint32_t sCompletionTail; /* sequencer reads */
+
+/* Push a completed cluster into the ring. Called from ISR context. */
+static void sdAsyncCompletionPush(void* cluster, int32_t result) {
+	uint32_t next = (sCompletionHead + 1) % SD_CLUSTER_COMPLETION_SIZE;
+	if (next == sCompletionTail) {
+		return; /* Ring full — drop (shouldn't happen with 16 slots) */
+	}
+	sCompletionRing[sCompletionHead].cluster = cluster;
+	sCompletionRing[sCompletionHead].result = result;
+	__asm__ volatile("dmb" ::: "memory");
+	sCompletionHead = next;
+}
+
+/* Public wrapper for push — called from ISR callback context. */
+void sdAsyncCompletionPushFromCallback(void* cluster, int32_t result) {
+	sdAsyncCompletionPush(cluster, result);
+}
+
+/* Pop a completed cluster from the ring. Called from sequencer task. */
+bool sdAsyncCompletionPop(SdClusterCompletion* out) {
+	if (sCompletionTail == sCompletionHead) {
+		return false;
+	}
+	__asm__ volatile("dmb" ::: "memory");
+	*out = sCompletionRing[sCompletionTail];
+	sCompletionTail = (sCompletionTail + 1) % SD_CLUSTER_COMPLETION_SIZE;
+	return true;
+}
+
 static void slowQueueDequeue(void) {
 	sSlowQueue.tail = (sSlowQueue.tail + 1) % SD_SLOW_QUEUE_SIZE;
 }

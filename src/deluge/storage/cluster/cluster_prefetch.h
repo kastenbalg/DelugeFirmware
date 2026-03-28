@@ -36,3 +36,16 @@
  *                        Set to 0 for automatic calculation based on tempo.
  */
 void prefetchUpcomingSampleClusters(int32_t lookAheadTicks = 0);
+
+class Sample;
+
+/**
+ * Push a cluster prefetch hint from the audio task.
+ * Called from SampleLowLevelReader::moveOnToNextCluster() when a voice
+ * crosses a cluster boundary. The sequencer drains these hints and
+ * prefetches clusters ahead of the voice's current position.
+ *
+ * Lock-free SPSC: audio task is sole producer, sequencer is sole consumer.
+ * Aligned 32-bit reads/writes on ARM Cortex-A9 are naturally atomic.
+ */
+void clusterPrefetchHintPush(Sample* sample, int32_t clusterIndex, int8_t playDirection);

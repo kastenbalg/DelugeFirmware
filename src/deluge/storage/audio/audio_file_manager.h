@@ -89,8 +89,9 @@ public:
 	AudioFile* getAudioFileFromFilename(String& fileName, bool mayReadCard, Error* error, FilePointer* filePointer,
 	                                    AudioFileType type, bool makeWaveTableWorkAtAllCosts = false);
 	bool loadCluster(Cluster& cluster, int32_t minNumReasonsAfter = 0);
+	bool
+	postProcessLoadedCluster(Cluster& cluster); /* Post-SD-read: format conversion, boundary stitching, mark loaded */
 	void loadAnyEnqueuedClusters(int32_t maxNum = 128, bool mayProcessUserActionsBetween = false);
-	void clusterLoaderMain(); /* Entry point for dedicated FreeRTOS cluster loader task */
 	void removeReasonFromCluster(Cluster& cluster, char const* errorCode, bool deletingSong = false);
 
 	bool ensureEnoughMemoryForOneMoreAudioFile();

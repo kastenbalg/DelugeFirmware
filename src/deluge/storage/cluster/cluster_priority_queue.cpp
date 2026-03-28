@@ -22,8 +22,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-extern TaskHandle_t clusterLoaderTaskHandle;
-
 void clusterQueueEnterCritical() {
 	taskENTER_CRITICAL();
 }
@@ -32,10 +30,9 @@ void clusterQueueExitCritical() {
 	taskEXIT_CRITICAL();
 }
 
+/* No-op under FreeRTOS: the sequencer task runs every ~1.45ms and
+ * drains the loading queue naturally via feedClusterReadsToISR(). */
 void clusterQueueNotifyLoader() {
-	if (clusterLoaderTaskHandle != nullptr) {
-		xTaskNotifyGive(clusterLoaderTaskHandle);
-	}
 }
 
 #else

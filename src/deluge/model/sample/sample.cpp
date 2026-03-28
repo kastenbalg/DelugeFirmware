@@ -1753,9 +1753,11 @@ void Sample::numReasonsDecreasedToZero(char const* errorCode) {
 
 			numClusterReasons += cluster->numReasonsToBeLoaded;
 
+#ifndef USE_FREERTOS
 			if (cluster == audioFileManager.clusterBeingLoaded) {
 				numClusterReasons--;
 			}
+#endif
 		}
 		// clusters[c].ensureNoReason(this);
 	}
@@ -1768,10 +1770,13 @@ void Sample::numReasonsDecreasedToZero(char const* errorCode) {
 			if (cluster) {
 				D_PRINT("cluster->numReasonsToBeLoaded[%d]", cluster->numReasonsToBeLoaded);
 
+#ifndef USE_FREERTOS
 				if (cluster == audioFileManager.clusterBeingLoaded) {
 					D_PRINTLN(" (loading)");
 				}
-				else if (!cluster->loaded) {
+				else
+#endif
+				    if (!cluster->loaded) {
 					D_PRINTLN(" (unloaded)");
 				}
 				else {

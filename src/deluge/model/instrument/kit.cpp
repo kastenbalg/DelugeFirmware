@@ -41,6 +41,7 @@
 #include "playback/mode/playback_mode.h"
 #include "playback/mode/session.h"
 #include "processing/engines/audio_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "processing/sound/sound_drum.h"
 #include "processing/stem_export/stem_export.h"
 #include "storage/audio/audio_file_manager.h"
@@ -1127,6 +1128,12 @@ void Kit::deleteBackedUpParamManagers(Song* song) {
 
 // Returns num ticks til next arp event
 int32_t Kit::doTickForwardForArp(ModelStack* modelStack, int32_t currentPos) {
+#ifdef USE_FREERTOS
+	if (!isAudioTask()) {
+		voiceEventKitArpTick(this, currentPos);
+		return 2147483647;
+	}
+#endif
 	if (!activeClip) {
 		return 2147483647;
 	}
@@ -1284,6 +1291,14 @@ int32_t Kit::doTickForwardForArp(ModelStack* modelStack, int32_t currentPos) {
 void Kit::noteOnPreKitArp(ModelStackWithThreeMainThings* modelStack, Drum* drum, uint8_t velocity,
                           int16_t const* mpeValues, int32_t fromMIDIChannel, uint32_t sampleSyncLength,
                           int32_t ticksLate, uint32_t samplesLate) {
+#ifdef USE_FREERTOS
+	if (!isAudioTask()) {
+		voiceEventKitNoteOn(this, drum, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()),
+		                    modelStack->paramManager, velocity, mpeValues, fromMIDIChannel, sampleSyncLength, ticksLate,
+		                    samplesLate);
+		return;
+	}
+#endif
 	ArpeggiatorSettings* arpSettings = getArpSettings();
 	ArpReturnInstruction kitInstruction;
 	// Run everything by the Kit Arp...
@@ -1325,6 +1340,13 @@ void Kit::noteOnPreKitArp(ModelStackWithThreeMainThings* modelStack, Drum* drum,
 }
 
 void Kit::noteOffPreKitArp(ModelStackWithThreeMainThings* modelStack, Drum* drum, int32_t velocity) {
+#ifdef USE_FREERTOS
+	if (!isAudioTask()) {
+		voiceEventKitNoteOff(this, drum, static_cast<InstrumentClip*>(modelStack->getTimelineCounterAllowNull()),
+		                     modelStack->paramManager, velocity);
+		return;
+	}
+#endif
 	ArpeggiatorSettings* arpSettings = getArpSettings();
 	ArpReturnInstruction kitInstruction;
 	// Run everything by the Kit Arp...

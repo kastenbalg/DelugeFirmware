@@ -19,12 +19,16 @@
 
 #include "processing/engines/voice_event_queue.h"
 #include "model/clip/instrument_clip.h"
+#include "model/drum/drum.h"
+#include "model/instrument/kit.h"
 #include "model/model_stack.h"
 #include "model/song/song.h"
 #include "model/voice/voice.h"
+#include "modulation/arpeggiator.h"
 #include "modulation/params/param_manager.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/sound/sound.h"
+#include "processing/sound/sound_drum.h"
 #include "processing/sound/sound_instrument.h"
 #include "task.h"
 
@@ -47,6 +51,10 @@ void voiceEventQueueInit() {
 	                                      &sVoiceEventQueueStorage);
 }
 
+/* Diagnostic counters — visible in debugger or via OLED display. */
+volatile uint32_t voiceEventDropCount = 0;
+volatile uint32_t voiceEventEnqueueCount = 0;
+
 bool voiceEventEnqueue(const VoiceEvent& event) {
 	if (sVoiceEventQueue == nullptr) {
 		return false;
@@ -54,7 +62,12 @@ bool voiceEventEnqueue(const VoiceEvent& event) {
 	/* Non-blocking send. If the queue is full, the event is dropped.
 	 * This is intentional — dropping a noteOn under extreme load is
 	 * preferable to blocking the sequencer/UI and causing a cascade. */
-	return xQueueSend(sVoiceEventQueue, &event, 0) == pdTRUE;
+	if (xQueueSend(sVoiceEventQueue, &event, 0) == pdTRUE) {
+		voiceEventEnqueueCount++;
+		return true;
+	}
+	voiceEventDropCount++;
+	return false;
 }
 
 /* Process a single voice event. Called from voiceEventProcessAll().
@@ -82,8 +95,104 @@ static ModelStackWithSoundFlags* buildModelStack(char* memory, Sound* sound, Ins
 	return ms3->addSoundFlags();
 }
 
+/* Build a ModelStackWithThreeMainThings for pre-arp noteOn/noteOff.
+ * These functions take ThreeMainThings, not SoundFlags. */
+static ModelStackWithThreeMainThings* buildModelStack3(char* memory, Sound* sound, InstrumentClip* clip,
+                                                       ParamManager* paramManager = nullptr) {
+	if (currentSong == nullptr || sound == nullptr) {
+		return nullptr;
+	}
+	ModelStack* ms = (ModelStack*)memory;
+	ms->song = currentSong;
+
+	ParamManager* pm = (paramManager != nullptr) ? paramManager : (clip != nullptr) ? &clip->paramManager : nullptr;
+
+	return ms->addTimelineCounter(clip)->addOtherTwoThingsButNoNoteRow(sound, pm);
+}
+
 static void processVoiceEvent(const VoiceEvent& event) {
 	switch (event.type) {
+
+		/* ---- Pre-arp events: audio task runs arp + voice creation ---- */
+
+	case VoiceEventType::PRE_ARP_NOTE_ON: {
+		char modelStackMemory[256];
+		ModelStackWithThreeMainThings* ms3 =
+		    buildModelStack3(modelStackMemory, event.sound, event.preArpNoteOn.clip, event.preArpNoteOn.paramManager);
+		if (ms3 != nullptr) {
+			event.sound->noteOn(ms3, event.preArpNoteOn.arpeggiator, event.preArpNoteOn.noteCode,
+			                    event.preArpNoteOn.mpeValues, event.preArpNoteOn.sampleSyncLength,
+			                    event.preArpNoteOn.ticksLate, event.preArpNoteOn.samplesLate,
+			                    event.preArpNoteOn.velocity, event.preArpNoteOn.fromMIDIChannel);
+		}
+		break;
+	}
+
+	case VoiceEventType::PRE_ARP_NOTE_OFF: {
+		char modelStackMemory[256];
+		ModelStackWithThreeMainThings* ms3 =
+		    buildModelStack3(modelStackMemory, event.sound, event.preArpNoteOff.clip, event.preArpNoteOff.paramManager);
+		if (ms3 != nullptr) {
+			event.sound->noteOff(ms3, event.preArpNoteOff.arpeggiator, event.preArpNoteOff.noteCode);
+		}
+		break;
+	}
+
+	case VoiceEventType::KIT_NOTE_ON: {
+		char modelStackMemory[256];
+		Kit* kit = event.kitNoteOn.kit;
+		Drum* drum = event.kitNoteOn.drum;
+		if (kit != nullptr && drum != nullptr && currentSong != nullptr) {
+			ModelStack* ms = (ModelStack*)modelStackMemory;
+			ms->song = currentSong;
+			/* ModelStack must use drum->toModControllable() (the SoundDrum as ModControllable)
+			 * and the drum's paramManager — this gets passed through to drum->noteOn() → Sound::noteOn(). */
+			auto* ms3 = ms->addTimelineCounter(event.kitNoteOn.clip)
+			                ->addOtherTwoThingsButNoNoteRow(drum->toModControllable(), event.kitNoteOn.paramManager);
+			kit->noteOnPreKitArp(ms3, drum, event.kitNoteOn.velocity, event.kitNoteOn.mpeValues,
+			                     event.kitNoteOn.fromMIDIChannel, event.kitNoteOn.sampleSyncLength,
+			                     event.kitNoteOn.ticksLate, event.kitNoteOn.samplesLate);
+		}
+		break;
+	}
+
+	case VoiceEventType::KIT_NOTE_OFF: {
+		char modelStackMemory[256];
+		Kit* kit = event.kitNoteOff.kit;
+		Drum* drum = event.kitNoteOff.drum;
+		if (kit != nullptr && drum != nullptr && currentSong != nullptr) {
+			ModelStack* ms = (ModelStack*)modelStackMemory;
+			ms->song = currentSong;
+			auto* ms3 = ms->addTimelineCounter(event.kitNoteOff.clip)
+			                ->addOtherTwoThingsButNoNoteRow(drum->toModControllable(), event.kitNoteOff.paramManager);
+			kit->noteOffPreKitArp(ms3, drum, event.kitNoteOff.velocity);
+		}
+		break;
+	}
+
+	case VoiceEventType::ARP_TICK: {
+		if (event.sound != nullptr && currentSong != nullptr) {
+			char modelStackMemory[256];
+			ModelStack* ms = (ModelStack*)modelStackMemory;
+			ms->song = currentSong;
+			static_cast<SoundInstrument*>(event.sound)->doTickForwardForArp(ms, event.arpTick.currentPos);
+		}
+		break;
+	}
+
+	case VoiceEventType::KIT_ARP_TICK: {
+		Kit* kit = event.kitArpTick.kit;
+		if (kit != nullptr && currentSong != nullptr) {
+			char modelStackMemory[256];
+			ModelStack* ms = (ModelStack*)modelStackMemory;
+			ms->song = currentSong;
+			kit->doTickForwardForArp(ms, event.kitArpTick.currentPos);
+		}
+		break;
+	}
+
+		/* ---- Legacy post-arp events (safety net for remaining direct callers) ---- */
+
 	case VoiceEventType::NOTE_ON: {
 		/* Reconstruct ModelStack and call noteOnPostArpeggiator.
 		 * This runs in the audio task — isAudioTask() returns true,
@@ -134,7 +243,14 @@ static void processVoiceEvent(const VoiceEvent& event) {
 
 	case VoiceEventType::KILL_SOUND:
 		if (event.sound != nullptr) {
-			event.sound->killAllVoices();
+			/* Full cleanup: kills voices, discards delay buffers,
+			 * ends stutter, resets arp/sidechain, reassesses render skipping.
+			 * Safe here because we're on the audio task. */
+			event.sound->wontBeRenderedForAWhile();
+		}
+		/* If a task is waiting for synchronous completion, wake it. */
+		if (event.killSound.waitingTask != nullptr) {
+			xTaskNotifyGive(event.killSound.waitingTask);
 		}
 		break;
 

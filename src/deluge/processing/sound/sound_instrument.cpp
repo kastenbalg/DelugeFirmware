@@ -30,6 +30,7 @@
 #include "modulation/patch/patch_cable_set.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "storage/audio/audio_file_manager.h"
 #include "storage/storage_manager.h"
 #include "util/misc.h"
@@ -412,6 +413,12 @@ void SoundInstrument::beenEdited(bool shouldMoveToEmptySlot) {
 
 // Returns num ticks til next arp event
 int32_t SoundInstrument::doTickForwardForArp(ModelStack* modelStack, int32_t currentPos) {
+#ifdef USE_FREERTOS
+	if (!isAudioTask()) {
+		voiceEventArpTick(this, currentPos);
+		return 2147483647; // actual timing handled by audio task's arp->render()
+	}
+#endif
 	if (!activeClip) {
 		return 2147483647;
 	}
@@ -455,69 +462,9 @@ int32_t SoundInstrument::doTickForwardForArp(ModelStack* modelStack, int32_t cur
 	return ticksTilNextArpEvent;
 }
 
-#ifdef USE_FREERTOS
-/* Advance the arp's sample-based phase accumulator. Called from the sequencer
- * task each DMA cycle. This replaces the arp processing that was inside
- * Sound::render() — it uses the same phase accumulator but runs in the
- * sequencer context, enqueuing resulting noteOn/noteOff events via the
- * voice event queue instead of calling voice functions directly. */
-void SoundInstrument::advanceArpPhase(ModelStack* modelStack, size_t numSamples) {
-	if (!activeClip) {
-		return;
-	}
-
-	ModelStackWithThreeMainThings* modelStackWithThreeMainThings =
-	    modelStack->addTimelineCounter(activeClip)
-	        ->addOtherTwoThingsButNoNoteRow(this, getParamManager(modelStack->song));
-
-	UnpatchedParamSet* unpatchedParams = modelStackWithThreeMainThings->paramManager->getUnpatchedParamSet();
-
-	ArpeggiatorSettings* arpSettings = getArpSettings();
-	if (arpSettings == nullptr) {
-		return;
-	}
-	arpSettings->updateParamsFromUnpatchedParamSet(unpatchedParams);
-
-	ArpReturnInstruction instruction;
-
-	if (arpSettings->mode != ArpMode::OFF) {
-		uint32_t gateThreshold = (uint32_t)unpatchedParams->getValue(params::UNPATCHED_ARP_GATE) + 2147483648;
-		uint32_t phaseIncrement =
-		    arpSettings->getPhaseIncrement(paramFinalValues[params::GLOBAL_ARP_RATE - params::FIRST_GLOBAL]);
-
-		getArp()->render(arpSettings, &instruction, numSamples, gateThreshold, phaseIncrement);
-	}
-	else {
-		getArp()->handlePendingNotes(arpSettings, &instruction);
-	}
-
-	ModelStackWithSoundFlags* modelStackWithSoundFlags = modelStackWithThreeMainThings->addSoundFlags();
-
-	/* Process noteOff events from arp — these go through the voice event queue
-	 * via noteOffPostArpeggiator's isAudioTask() check. */
-	bool atLeastOneOff = false;
-	for (int32_t n = 0; n < ARP_MAX_INSTRUCTION_NOTES; n++) {
-		if (instruction.glideNoteCodeOffPostArp[n] == ARP_NOTE_NONE) {
-			break;
-		}
-		atLeastOneOff = true;
-		noteOffPostArpeggiator(modelStackWithSoundFlags, instruction.glideNoteCodeOffPostArp[n]);
-	}
-	for (int32_t n = 0; n < ARP_MAX_INSTRUCTION_NOTES; n++) {
-		if (instruction.noteCodeOffPostArp[n] == ARP_NOTE_NONE) {
-			break;
-		}
-		atLeastOneOff = true;
-		noteOffPostArpeggiator(modelStackWithSoundFlags, instruction.noteCodeOffPostArp[n]);
-	}
-	if (atLeastOneOff) {
-		invertReversed = false;
-	}
-
-	/* Process noteOn events from arp — enqueued via the voice event queue. */
-	process_postarp_notes(modelStackWithSoundFlags, arpSettings, instruction);
-}
-#endif
+/* advanceArpPhase removed — arp phase accumulator now runs inline in
+ * Sound::render() on the audio task, matching the stock firmware model.
+ * This eliminates phase drift from missed sequencer cycles. */
 
 void SoundInstrument::getThingWithMostReverb(Sound** soundWithMostReverb, ParamManager** paramManagerWithMostReverb,
                                              GlobalEffectableForClip** globalEffectableWithMostReverb,

@@ -298,8 +298,8 @@ public:
 	/// @brief Does this sound have any active voices?
 	[[nodiscard]] bool hasActiveVoices() const override { return !voices_.empty(); }
 
-	/// @brief Get the number of active voices
-	[[nodiscard]] size_t numActiveVoices() const { return voices_.size(); }
+	/// @brief Get the number of active voices (excludes zombies awaiting cleanup)
+	[[nodiscard]] size_t numActiveVoices() const;
 
 	/// @brief Immediately ends all active voices
 	void killAllVoices() override;
