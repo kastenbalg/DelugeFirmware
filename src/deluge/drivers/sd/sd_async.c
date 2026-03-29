@@ -50,7 +50,7 @@ extern int sd_write_sect(int sd_port, unsigned char const* buff, unsigned long p
 
 /* Forward declarations for functions used before definition */
 static void handleAllEnd(void);
-static void handleSectorDone(void);
+static void handleRequestDone(void);
 
 /* ========================================================================
  * Simple lock-free SPSC ring buffers for fast and slow queues.
@@ -173,24 +173,23 @@ static void slowQueueDequeue(void) {
 /* ========================================================================
  * ISR State Machine
  *
- * Drives the SDHI hardware through single-sector read/write operations.
- * Each ISR invocation advances one state. Between ISR calls, the SDHI
- * DMA runs autonomously.
+ * Drives the SDHI hardware through multi-block read/write operations.
+ * Each ISR invocation advances one state. Between CMD_SENT and ALL_END_WAIT
+ * the SDHI DMA runs autonomously, transferring the entire request in one shot.
  *
  * States:
- *   IDLE         — No active transfer. Dequeue next request.
- *   CMD_SENT     — CMD17/CMD24 issued, waiting for response interrupt.
- *   ALL_END_WAIT — Waiting for "All end" interrupt after DMA.
- *   WRITE_BUSY   — After write, waiting for card to finish programming.
- *   SECTOR_DONE  — Sector complete, decide next action (interleave).
- *   ERROR        — Error occurred, clean up and notify requester.
+ *   IDLE           — No active transfer. Dequeue next request.
+ *   CMD_SENT       — CMD18/CMD25 issued, waiting for response interrupt.
+ *   ALL_END_WAIT   — Waiting for "All end" interrupt after DMA.
+ *   REQUEST_DONE   — Full multi-block transfer complete; pick next request.
+ *   ERROR          — Error occurred, clean up and notify requester.
  * ======================================================================== */
 
 typedef enum {
 	SD_STATE_IDLE,
 	SD_STATE_CMD_SENT,
 	SD_STATE_ALL_END_WAIT,
-	SD_STATE_SECTOR_DONE,
+	SD_STATE_REQUEST_DONE,
 	SD_STATE_ERROR,
 } SdAsyncState;
 
@@ -199,10 +198,10 @@ static struct {
 	SdAsyncState state;
 	SdRequest* currentReq;       /* Points into the queue entry */
 	bool currentIsFast;          /* Which queue the current request came from */
-	uint32_t currentSector;      /* Next sector to transfer */
-	uint8_t* currentBuffer;      /* Next buffer position */
-	uint32_t sectorsRemaining;   /* Sectors left in current request */
-	uint8_t fastCounter;         /* Fast-path sectors done in current round */
+	uint32_t currentSector;      /* Starting sector for the current request */
+	uint8_t* currentBuffer;      /* Buffer for the current request */
+	uint32_t sectorsRemaining;   /* Sector count for the current request */
+	uint8_t fastCounter;         /* Fast-path requests completed in current round */
 	SDHNDL* hndl;                /* SDHI hardware handle */
 	int dma64;                   /* DMA 64-byte transfer mode flag */
 	bool active;                 /* True after sdAsyncStart() */
@@ -215,27 +214,24 @@ static inline uint32_t sectorToAddr(uint32_t sector) {
 	return (sState.hndl->csd_structure == 0x01) ? sector : (sector * 512);
 }
 
-/* ---- Start a single-sector read: send CMD17 ---- */
-static void startSectorRead(void) {
+/* ---- Start a multi-block read: send CMD18 ---- */
+static void startMultiBlockRead(void) {
 	SDHNDL* hndl = sState.hndl;
 	uint32_t addr = sectorToAddr(sState.currentSector);
-
-	/* Match the exact sequence from the original _sd_single_read + _sd_send_mcmd.
-	 * Order matters — the SDHI hardware has implicit assumptions about
-	 * register write sequence. */
 
 	/* Clear software interrupt tracking */
 	hndl->int_info1 = 0;
 	hndl->int_info2 = 0;
 
-	/* Set block size and disable auto-CMD12 (same as sd_read_sect) */
+	/* Set block size, enable SD_SECCNT and auto-CMD12 */
 	sd_outp(hndl, SD_SIZE, 512);
-	sd_outp(hndl, SD_STOP, 0x0000);
+	sd_outp(hndl, SD_STOP, 0x0100);
+	sd_outp(hndl, SD_SECCNT, (unsigned short)sState.sectorsRemaining);
 
-	/* Step 1: Enable response and ILA interrupts (same as _sd_single_read line 497) */
+	/* Enable response and ILA interrupts */
 	_sd_set_int_mask(hndl, SD_INFO1_MASK_RESP, SD_INFO2_MASK_ILA);
 
-	/* Step 2: DMA mode setup (same as _sd_single_read lines 499-509) */
+	/* DMA mode setup */
 	if (hndl->trans_mode & SD_MODE_DMA_64) {
 		sState.dma64 = SD_MODE_DMA_64;
 		sd_outp(hndl, EXT_SWAP, 0x0100);
@@ -243,12 +239,11 @@ static void startSectorRead(void) {
 	else {
 		sState.dma64 = SD_MODE_DMA;
 	}
-	sd_outp(hndl, CC_EXT_MODE, 2); /* enable DMA */
+	sd_outp(hndl, CC_EXT_MODE, (unsigned short)(sd_inp(hndl, CC_EXT_MODE) | CC_EXT_MODE_DMASDRW));
 
-	/* Step 3: Send CMD17 (same sequence as _sd_send_mcmd lines 270-283) */
+	/* Set command argument and wait for clock divider ready */
 	_sd_set_arg(hndl, (unsigned short)(addr >> 16), (unsigned short)(addr & 0xFFFF));
 
-	/* Wait for clock divider ready */
 	{
 		int i;
 		for (i = 0; i < 10000; i++) {
@@ -257,30 +252,36 @@ static void startSectorRead(void) {
 			}
 		}
 		if (i == 10000) {
-			/* Clock divider not ready — card/hardware issue */
 			hndl->error = SD_ERR_CBSY_ERROR;
 			sState.state = SD_STATE_ERROR;
 			return;
 		}
 	}
 
-	/* Issue CMD17 */
-	sd_outp(hndl, SD_CMD, CMD17);
+	/* Issue CMD18 (READ_MULTIPLE_BLOCK) */
+	sd_outp(hndl, SD_CMD, CMD18);
 
 	sState.state = SD_STATE_CMD_SENT;
 }
 
-/* ---- Start a single-sector write: send CMD24 ---- */
-static void startSectorWrite(void) {
+/* ---- Start a multi-block write: send CMD25 ---- */
+static void startMultiBlockWrite(void) {
 	SDHNDL* hndl = sState.hndl;
 	uint32_t addr = sectorToAddr(sState.currentSector);
 
 	hndl->int_info1 = 0;
 	hndl->int_info2 = 0;
 
-	sd_outp(hndl, SD_SIZE, 512);
-	sd_outp(hndl, SD_STOP, 0x0000);
+	/* Flush write buffer to DRAM before DMA reads from it */
+	v7_dma_flush_range((uintptr_t)sState.currentBuffer,
+	                   (uintptr_t)(sState.currentBuffer + sState.sectorsRemaining * 512));
 
+	/* Set block size, enable SD_SECCNT and auto-CMD12 */
+	sd_outp(hndl, SD_SIZE, 512);
+	sd_outp(hndl, SD_STOP, 0x0100);
+	sd_outp(hndl, SD_SECCNT, (unsigned short)sState.sectorsRemaining);
+
+	/* DMA mode setup */
 	if (hndl->trans_mode & SD_MODE_DMA_64) {
 		sState.dma64 = SD_MODE_DMA_64;
 		sd_outp(hndl, EXT_SWAP, 0x0100);
@@ -288,8 +289,6 @@ static void startSectorWrite(void) {
 	else {
 		sState.dma64 = SD_MODE_DMA;
 	}
-
-	/* Enable DMA */
 	sd_outp(hndl, CC_EXT_MODE, (unsigned short)(sd_inp(hndl, CC_EXT_MODE) | CC_EXT_MODE_DMASDRW));
 
 	/* Enable response interrupt */
@@ -297,8 +296,8 @@ static void startSectorWrite(void) {
 
 	_sd_set_arg(hndl, (unsigned short)(addr >> 16), (unsigned short)(addr & 0xFFFF));
 
-	/* Issue CMD24 (WRITE_SINGLE_BLOCK) */
-	sd_outp(hndl, SD_CMD, CMD24);
+	/* Issue CMD25 (WRITE_MULTIPLE_BLOCK) */
+	sd_outp(hndl, SD_CMD, CMD25);
 
 	sState.state = SD_STATE_CMD_SENT;
 }
@@ -335,28 +334,29 @@ static void handleCmdResponse(void) {
 	/* Enable "All end" and error interrupts */
 	_sd_set_int_mask(hndl, SD_INFO1_MASK_DATA_TRNS, SD_INFO2_MASK_ERR);
 
-	/* Invalidate cache for read buffer (required before and after DMA) */
+	/* Invalidate cache for the full read buffer before DMA writes into it */
+	long transferBytes = (long)sState.sectorsRemaining * 512;
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
 	if (isRead) {
-		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
+		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (uintptr_t)(sState.currentBuffer + transferBytes));
 	}
 
-	/* Initialize DMAC */
+	/* Initialize DMAC for the full multi-block transfer */
 	unsigned long regAddr = hndl->reg_base;
 	if (sState.dma64 != SD_MODE_DMA_64) {
 		regAddr += SD_BUF0;
 	}
 
 	int dir = isRead ? SD_TRANS_READ : SD_TRANS_WRITE;
-	if (sddev_init_dma(hndl->sd_port, (unsigned long)sState.currentBuffer, regAddr, 512, dir) != SD_OK) {
+	if (sddev_init_dma(hndl->sd_port, (unsigned long)sState.currentBuffer, regAddr, transferBytes, dir) != SD_OK) {
 		hndl->error = SD_ERR_CPU_IF;
 		sState.state = SD_STATE_ERROR;
 		return;
 	}
 
-	/* DMA is now running autonomously. Wait for the SDHI DATA_TRNS ("all end")
-	 * interrupt — the card won't signal transfer complete until DMA is done,
-	 * so we don't need a separate DMA completion interrupt. */
+	/* DMA is now running autonomously for all sectors. The SDHI hardware
+	 * will auto-issue CMD12 when SD_SECCNT reaches zero, then fire the
+	 * DATA_TRNS ("all end") interrupt. */
 	sState.state = SD_STATE_ALL_END_WAIT;
 }
 
@@ -383,10 +383,11 @@ static void handleAllEnd(void) {
 	 * before we invalidate the cache, otherwise the CPU can read stale data. */
 	__asm__ volatile("dsb" ::: "memory");
 
-	/* Invalidate cache after read DMA */
+	/* Invalidate cache after read DMA — covers the full multi-block buffer */
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
 	if (isRead) {
-		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (intptr_t)(sState.currentBuffer + 512));
+		v7_dma_inv_range((uintptr_t)sState.currentBuffer,
+		                 (uintptr_t)(sState.currentBuffer + sState.sectorsRemaining * 512));
 	}
 
 	/* Clear All end bit and disable data transfer interrupts */
@@ -400,7 +401,7 @@ static void handleAllEnd(void) {
 	hndl->int_info1 = 0;
 	hndl->int_info2 = 0;
 
-	sState.state = SD_STATE_SECTOR_DONE;
+	sState.state = SD_STATE_REQUEST_DONE;
 }
 
 /* ---- Complete a request: notify the requester ---- */
@@ -425,7 +426,7 @@ static void completeRequest(SdRequest* req, int32_t result) {
 	}
 }
 
-/* ---- Pick the next request based on interleaving ratio ---- */
+/* ---- Pick the next request based on request-level interleaving ratio ---- */
 static SdRequest* pickNextRequest(bool* isFast) {
 	bool hasFast = !fastQueueEmpty();
 	bool hasSlow = !slowQueueEmpty();
@@ -436,141 +437,41 @@ static SdRequest* pickNextRequest(bool* isFast) {
 
 	if (hasFast && !hasSlow) {
 		*isFast = true;
-		sState.fastCounter = 0;
 		return fastQueuePeek();
 	}
 
 	if (!hasFast && hasSlow) {
 		*isFast = false;
-		sState.fastCounter = 0;
 		return slowQueuePeek();
 	}
 
-	/* Both queues have work — apply ratio */
+	/* Both queues have work — apply request-level ratio.
+	 * fastCounter is incremented per completed fast request and reset
+	 * to 0 after each slow request (in handleRequestDone). */
 	if (sState.fastCounter < SD_FAST_SLOW_RATIO) {
 		*isFast = true;
 		return fastQueuePeek();
 	}
 	else {
 		*isFast = false;
-		sState.fastCounter = 0;
 		return slowQueuePeek();
 	}
 }
 
-/* ---- Handle sector done: advance or switch requests ---- */
-static void handleSectorDone(void) {
-	/* Advance buffer and sector */
-	sState.currentBuffer += 512;
-	sState.currentSector++;
-	sState.sectorsRemaining--;
-
-	if (sState.sectorsRemaining > 0) {
-		/* More sectors in current request. But check if we should
-		 * interleave — only if we're on the fast path and have done
-		 * enough fast sectors, AND the slow queue has work. */
-		if (sState.currentIsFast) {
-			sState.fastCounter++;
-			if (sState.fastCounter >= SD_FAST_SLOW_RATIO && !slowQueueEmpty()) {
-				/* Pause current fast request, switch to slow.
-				 * We'll resume the fast request later. But we can't
-				 * pause mid-request easily with the ring buffer...
-				 *
-				 * Instead: the interleaving happens at the sector level
-				 * within a request. After SD_FAST_SLOW_RATIO fast sectors
-				 * of the current request, do 1 slow sector, then continue
-				 * the fast request. The slow sector comes from a different
-				 * request (peeked, not dequeued until fully done). */
-
-				/* Save fast request state — it stays at the head of the
-				 * fast queue with updated sector/buffer/count. We update
-				 * the queue entry in place. */
-				SdRequest* fastReq = sState.currentReq;
-				fastReq->sector = sState.currentSector;
-				fastReq->buffer = sState.currentBuffer;
-				fastReq->sectorCount = sState.sectorsRemaining;
-
-				/* Switch to one slow sector */
-				SdRequest* slowReq = slowQueuePeek();
-				if (slowReq != NULL) {
-					sState.currentReq = slowReq;
-					sState.currentIsFast = false;
-					sState.currentSector = slowReq->sector;
-					sState.currentBuffer = slowReq->buffer;
-					sState.sectorsRemaining = slowReq->sectorCount;
-					sState.fastCounter = 0;
-
-					/* Start the slow sector */
-					if (slowReq->type == SD_REQ_WRITE) {
-						startSectorWrite();
-					}
-					else {
-						startSectorRead();
-					}
-					return;
-				}
-			}
-		}
-		else {
-			/* We just did one slow sector. Save progress back to the queue
-			 * entry — symmetric with how the fast path saves its state when
-			 * pausing for an interleaved slow sector. This keeps the entry
-			 * valid for the next interleave step or if we continue slow. */
-			SdRequest* slowReq = sState.currentReq;
-			slowReq->sector = sState.currentSector;
-			slowReq->buffer = sState.currentBuffer;
-			slowReq->sectorCount = sState.sectorsRemaining;
-
-			/* Switch back to fast path if a request is waiting */
-			SdRequest* fastReq = fastQueuePeek();
-			if (fastReq != NULL) {
-				sState.currentReq = fastReq;
-				sState.currentIsFast = true;
-				sState.currentSector = fastReq->sector;
-				sState.currentBuffer = fastReq->buffer;
-				sState.sectorsRemaining = fastReq->sectorCount;
-
-				if (fastReq->type == SD_REQ_WRITE) {
-					startSectorWrite();
-				}
-				else {
-					startSectorRead();
-				}
-				return;
-			}
-
-			/* No fast request — continue slow. sState already points to
-			 * the next sector; sectorsRemaining > 0 is guaranteed by the
-			 * enclosing if. */
-			if (sState.currentReq->type == SD_REQ_WRITE) {
-				startSectorWrite();
-			}
-			else {
-				startSectorRead();
-			}
-			return;
-		}
-
-		/* Continue current request — start next sector */
-		if (sState.currentReq->type == SD_REQ_WRITE) {
-			startSectorWrite();
-		}
-		else {
-			startSectorRead();
-		}
-		return;
-	}
-
-	/* Current request fully done */
+/* ---- Handle request done: complete and pick next ---- */
+static void handleRequestDone(void) {
+	/* Complete the current request and dequeue it */
 	completeRequest(sState.currentReq, 0);
 	if (sState.currentIsFast) {
 		fastQueueDequeue();
+		sState.fastCounter++;
 	}
 	else {
 		slowQueueDequeue();
+		sState.fastCounter = 0; /* Reset ratio counter after servicing a slow request */
 	}
 
-	/* Pick next request */
+	/* Pick the next request */
 	bool isFast;
 	SdRequest* next = pickNextRequest(&isFast);
 	if (next == NULL) {
@@ -585,10 +486,10 @@ static void handleSectorDone(void) {
 	sState.sectorsRemaining = next->sectorCount;
 
 	if (next->type == SD_REQ_WRITE) {
-		startSectorWrite();
+		startMultiBlockWrite();
 	}
 	else {
-		startSectorRead();
+		startMultiBlockRead();
 	}
 }
 
@@ -596,6 +497,9 @@ static void handleSectorDone(void) {
 static void handleError(void) {
 	SDHNDL* hndl = sState.hndl;
 	int32_t error = hndl->error;
+
+	/* Force-stop any in-progress multi-block transfer before resetting */
+	sd_outp(hndl, SD_STOP, 0x0001);
 
 	/* Soft reset the SDHI controller */
 	unsigned short optBack = sd_inp(hndl, SD_OPTION);
@@ -642,10 +546,10 @@ static void handleError(void) {
 	sState.sectorsRemaining = next->sectorCount;
 
 	if (next->type == SD_REQ_WRITE) {
-		startSectorWrite();
+		startMultiBlockWrite();
 	}
 	else {
-		startSectorRead();
+		startMultiBlockRead();
 	}
 }
 
@@ -680,16 +584,16 @@ void sdAsyncISR(void) {
 		sState.sectorsRemaining = req->sectorCount;
 
 		if (req->type == SD_REQ_WRITE) {
-			startSectorWrite();
+			startMultiBlockWrite();
 		}
 		else {
-			startSectorRead();
+			startMultiBlockRead();
 		}
 		break;
 	}
 
 	case SD_STATE_CMD_SENT:
-		/* Command response received */
+		/* CMD18/CMD25 response received — set up DMA for full transfer */
 		if (hndl->int_info1 & SD_INFO1_MASK_RESP) {
 			handleCmdResponse();
 		}
@@ -701,17 +605,17 @@ void sdAsyncISR(void) {
 		break;
 
 	case SD_STATE_ALL_END_WAIT:
-		/* "All end" interrupt received */
+		/* "All end" fires once after all sectors and auto-CMD12 complete */
 		if (hndl->int_info1 & SD_INFO1_MASK_DATA_TRNS) {
 			handleAllEnd();
 		}
-		if (sState.state == SD_STATE_SECTOR_DONE) {
-			handleSectorDone();
+		if (sState.state == SD_STATE_REQUEST_DONE) {
+			handleRequestDone();
 		}
 		break;
 
-	case SD_STATE_SECTOR_DONE:
-		handleSectorDone();
+	case SD_STATE_REQUEST_DONE:
+		handleRequestDone();
 		break;
 
 	case SD_STATE_ERROR:
@@ -734,7 +638,7 @@ static void sdAsyncKick(void) {
 	/* Kick the ISR state machine from task context.
 	 * Disable interrupts briefly to prevent the SDHI ISR from
 	 * running concurrently with our initial state machine step.
-	 * The ISR state machine sends CMD17/CMD24 which triggers the
+	 * The ISR state machine sends CMD18/CMD25 which triggers the
 	 * first SDHI interrupt — from then on, the ISR chains
 	 * transfers autonomously. */
 	UBaseType_t savedInterrupts = taskENTER_CRITICAL_FROM_ISR();
@@ -889,7 +793,7 @@ int32_t sdAsyncSyncRead(uint32_t sector, uint8_t* buffer, uint32_t sectorCount) 
 
 		/* Format: I + state(0-4) + 2-digit ISR count
 		 * e.g. "I136" = stuck in CMD_SENT(1) after 36 ISRs
-		 * States: 0=IDLE 1=CMD_SENT 2=ALL_END_WAIT 3=SECTOR_DONE 4=ERROR */
+		 * States: 0=IDLE 1=CMD_SENT 2=ALL_END_WAIT 3=REQUEST_DONE 4=ERROR */
 		char buf[5];
 		buf[0] = 'I';
 		buf[1] = '0' + (int)sState.state;

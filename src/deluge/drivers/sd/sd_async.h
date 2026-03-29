@@ -29,9 +29,10 @@
  * - Fast path (cluster reads): non-blocking, callback on completion
  * - Slow path (FatFS reads/writes): blocks calling task on semaphore
  *
- * The ISR interleaves fast and slow requests at the sector level with
- * a configurable ratio (SD_FAST_SLOW_RATIO fast sectors per 1 slow sector).
- * When one queue is empty, the other gets full bandwidth.
+ * The ISR interleaves fast and slow requests at the request level with
+ * a configurable ratio (SD_FAST_SLOW_RATIO fast requests per 1 slow request).
+ * Each request is a full multi-block DMA transfer (CMD18/CMD25). When one
+ * queue is empty, the other gets full bandwidth.
  *
  * This replaces sdCardMutex — the ISR is the sole owner of the SDHI
  * hardware. No task ever touches SDHI directly after initialization.
@@ -46,13 +47,13 @@
 extern "C" {
 #endif
 
-/* Interleaving ratio: N fast-path sectors per 1 slow-path sector.
+/* Interleaving ratio: N fast-path requests per 1 slow-path request.
  * Only applies when both queues have pending work. */
 #define SD_FAST_SLOW_RATIO 2
 
 /* Queue capacities */
-#define SD_FAST_QUEUE_SIZE 16 /* Cluster read requests (each up to 64 sectors) */
-#define SD_SLOW_QUEUE_SIZE 8  /* FatFS read/write requests (each 1-8 sectors) */
+#define SD_FAST_QUEUE_SIZE 32 /* Cluster read requests (each up to 64 sectors) */
+#define SD_SLOW_QUEUE_SIZE 4  /* FatFS read/write requests (FatFS serializes; 2-3 tasks max) */
 
 /* Request types */
 typedef enum {

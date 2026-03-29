@@ -469,7 +469,7 @@ void cullVoices(int32_t direness, int32_t numAudio, int32_t numVoice) {
 
 		// Hard cull: direness at max or very close (13-14)
 		if (direnessOver >= 3) {
-			int32_t num_to_cull = std::max(direnessOver >> 1, 1);
+			int32_t num_to_cull = std::max(direnessOver >> 1, (int32_t)1);
 
 			// leave at least MIN_VOICES
 			num_to_cull = std::min(num_to_cull, numAudio + numVoice - MIN_VOICES);
@@ -553,7 +553,7 @@ void updateDirenessPostRender() {
 		// Slow release: ~12.5% step toward measured value
 		smoothedDireness8x += (measured8x - smoothedDireness8x) >> 3;
 	}
-	smoothedDireness8x = std::clamp(smoothedDireness8x, 0, kMaxDireness << 3);
+	smoothedDireness8x = std::clamp(smoothedDireness8x, (int32_t)0, (int32_t)(kMaxDireness << 3));
 
 	// Set starting direness for next buffer
 	cpuDireness = smoothedDireness8x >> 3;
