@@ -36,12 +36,22 @@
 extern void v7_l1_dma_inv_range(uintptr_t start, uintptr_t end);
 extern void v7_l1_dma_flush_range(uintptr_t start, uintptr_t end);
 
-/* Invalidate L2 cache lines covering [start, end) by physical address. */
+/* Invalidate L2 cache lines covering [start, end) by physical address.
+ * Unaligned edge lines are clean+invalidated to avoid discarding dirty data
+ * in adjacent bytes sharing the same cache line (mirrors v7_l1_dma_inv_range). */
 void l2c_inv_range(uintptr_t start, uintptr_t end) {
-	uintptr_t addr = start & ~((uintptr_t)CACHE_LINE_SIZE - 1);
-	while (addr < end) {
-		L2C.REG7_INV_PA = (uint32_t)addr;
-		addr += CACHE_LINE_SIZE;
+	uintptr_t mask = CACHE_LINE_SIZE - 1;
+	if (start & mask) {
+		L2C.REG7_CLEAN_INV_PA = (uint32_t)(start & ~mask);
+		start = (start | mask) + 1;
+	}
+	if (end & mask) {
+		L2C.REG7_CLEAN_INV_PA = (uint32_t)(end & ~mask);
+		end &= ~mask;
+	}
+	while (start < end) {
+		L2C.REG7_INV_PA = (uint32_t)start;
+		start += CACHE_LINE_SIZE;
 	}
 	L2C.REG7_CACHE_SYNC = 0;
 }
