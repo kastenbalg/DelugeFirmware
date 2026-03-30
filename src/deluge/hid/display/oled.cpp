@@ -35,12 +35,12 @@
 #include <string_view>
 
 extern "C" {
+#include "RZA1/compiler/asm/inc/asm.h"
 #include "RZA1/oled/oled_low_level.h"
 #include "RZA1/rspi/rspi.h"
 #include "RZA1/uart/sio_char.h"
 #include "drivers/oled/oled.h"
 #include "gui/fonts/fonts.h"
-extern void v7_dma_flush_range(uint32_t start, uint32_t end);
 }
 
 extern uint8_t usbInitializationPeriodComplete;

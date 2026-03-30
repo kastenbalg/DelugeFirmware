@@ -37,6 +37,7 @@
 
 #if ((USB_CFG_DTC == USB_CFG_ENABLE) || (USB_CFG_DMA == USB_CFG_ENABLE))
 #include "RZA1/cache/cache.h"
+#include "RZA1/compiler/asm/inc/asm.h"
 #include "RZA1/intc/devdrv_intc.h" /* INTC Driver Header   */
 #include "drivers/usb/r_usb_basic/src/hw/inc/r_usb_dmac.h"
 
@@ -476,6 +477,7 @@ void usb_cstd_DmaxInt(usb_utr_t* ptr, uint16_t pipemode)
                         /* check FIFO_EMPTY / INBUF bit */
                         if ((usb_creg_read_pipectr(ip, pipe) & USB_INBUFM) != USB_INBUFM)
                         {
+                            L2CacheCleanInvalidateAll();
                             L1_D_CacheWritebackFlushAll();
                     /* DMA transfer function end. call callback function */
 
@@ -1712,8 +1714,8 @@ void usb_cpu_buf2dxfifo_start_dma0(
 {
     useport = usb_dma_ip_ch_no2useport(ip, USB_CFG_CH0);
 
-    /* add cache update */
-    L1_D_CacheWritebackFlushAll();
+    /* Flush source buffer to SDRAM so DMA can read current data */
+    v7_dma_flush_range(src_adr, src_adr + transfer_size);
 
     /* Wait for RZA1 check stasus register Channel Status Register EN==0 and TACT==0 */
     if ((DMAC0.CHSTAT_n & 0x05) != 0u)
@@ -1794,8 +1796,8 @@ void usb_cpu_buf2dxfifo_start_dma1(
 {
     useport = usb_dma_ip_ch_no2useport(ip, USB_CFG_CH1);
 
-    /* add cache update */
-    L1_D_CacheWritebackFlushAll();
+    /* Flush source buffer to SDRAM so DMA can read current data */
+    v7_dma_flush_range(src_adr, src_adr + transfer_size);
 
     /* Wait for RZA1 check stasus register Channel Status Register EN==0 and TACT==0 */
     if ((DMAC1.CHSTAT_n & 0x05) != 0u)
@@ -1875,8 +1877,8 @@ void usb_cpu_buf2d1fifo_start_dma2(
 {
     useport = usb_dma_ip_ch_no2useport(ip, USB_CFG_CH2);
 
-    /* add cache update */
-    L1_D_CacheWritebackFlushAll();
+    /* Flush source buffer to SDRAM so DMA can read current data */
+    v7_dma_flush_range(src_adr, src_adr + transfer_size);
 
     /* Wait for RZA1 check stasus register Channel Status Register EN==0 and TACT==0 */
     if ((DMAC2.CHSTAT_n & 0x05) != 0u)
@@ -1956,8 +1958,8 @@ void usb_cpu_buf2d1fifo_start_dma3(
 {
     useport = usb_dma_ip_ch_no2useport(ip, USB_CFG_CH3);
 
-    /* add cache update */
-    L1_D_CacheWritebackFlushAll();
+    /* Flush source buffer to SDRAM so DMA can read current data */
+    v7_dma_flush_range(src_adr, src_adr + transfer_size);
 
     /* Wait for RZA1 check stasus register Channel Status Register EN==0 and TACT==0 */
     if ((DMAC3.CHSTAT_n & 0x05) != 0u)

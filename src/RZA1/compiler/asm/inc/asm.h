@@ -26,8 +26,13 @@ extern void __disable_irq(void);
 extern void __enable_fiq(void);
 extern void __disable_fiq(void);
 
-//! \section asm-invalidate ASM stubs defined in invalidate.S
+//! \section cache-maintenance Combined L1+L2 DMA cache maintenance (cache_maintenance.c)
 extern void v7_dma_inv_range(uintptr_t start, uintptr_t end);
 extern void v7_dma_flush_range(uintptr_t start, uintptr_t end);
+
+//! \section l2-cache L2 (PL310) range-based cache maintenance (cache_maintenance.c)
+extern void l2c_inv_range(uintptr_t start, uintptr_t end);
+extern void l2c_clean_range(uintptr_t start, uintptr_t end);
+extern void l2c_clean_inv_range(uintptr_t start, uintptr_t end);
 
 #endif /* COMPILER_ASM_H_ */

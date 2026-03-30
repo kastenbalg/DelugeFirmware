@@ -62,6 +62,7 @@ void L1PrefetchEnable(void);
 void L1PrefetchDisable(void);
 void L2CacheInit(void);
 void L2CacheFlushAll(void);
+void L2CacheCleanInvalidateAll(void);
 void L2CacheEnable(void);
 void L2CacheDisable(void);
 void L2CacheInit(void);

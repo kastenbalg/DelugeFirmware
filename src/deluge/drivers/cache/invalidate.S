@@ -25,12 +25,12 @@
 	.text
 	.code 32
 
-	.global v7_dma_inv_range
+	.global v7_l1_dma_inv_range
 
-	.func v7_dma_inv_range
-	.type v7_dma_inv_range, %function
+	.func v7_l1_dma_inv_range
+	.type v7_l1_dma_inv_range, %function
 
-v7_dma_inv_range:
+v7_l1_dma_inv_range:
          dcache_line_size r2, r3
          sub     r3, r2, #1
          tst     r0, r3
@@ -53,12 +53,12 @@ v7_dma_inv_range:
          bx     lr
 	.endfunc
 
-	.global v7_dma_flush_range
+	.global v7_l1_dma_flush_range
 
-	.func v7_dma_flush_range
-	.type v7_dma_flush_range, %function
+	.func v7_l1_dma_flush_range
+	.type v7_l1_dma_flush_range, %function
 
-v7_dma_flush_range:
+v7_l1_dma_flush_range:
 		dcache_line_size r2, r3
 		sub     r3, r2, #1
 		bic     r0, r0, r3
