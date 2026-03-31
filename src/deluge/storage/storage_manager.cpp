@@ -911,6 +911,15 @@ void FileReader::readDone() {
 		return;
 	}
 
+#ifdef USE_FREERTOS
+	// Under FreeRTOS, cluster loading, graphics, and UI timers run in dedicated
+	// tasks (sequencer at ~1.45ms, audio at ~1.45ms). Calling them here from
+	// inside the deserializer created reentrancy hazards — the sequencer task
+	// could preempt and modify shared state (e.g. xmlArea) mid-parse, causing
+	// E365 corruption during song loading.
+	return;
+#endif
+
 	if (!(readCount & 63)) { // 511 bad. 255 almost fine. 127 almost always fine
 		AudioEngine::routineWithClusterLoading();
 
