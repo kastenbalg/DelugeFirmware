@@ -23,6 +23,10 @@
 #include "model/sample/sample.h"
 #include "storage/audio/audio_file_manager.h"
 #include "storage/audio/audio_file_reader.h"
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
 #include "storage/wave_table/wave_table.h"
 #include "util/misc.h"
 #include <cstring>
@@ -482,6 +486,9 @@ finishedWhileLoop:
 }
 
 void AudioFile::addReason() {
+#ifdef USE_FREERTOS
+	taskENTER_CRITICAL();
+#endif
 	// If it was zero before, it's no longer unused
 	if (!numReasonsToBeLoaded) {
 		remove();
@@ -489,23 +496,45 @@ void AudioFile::addReason() {
 	}
 
 	numReasonsToBeLoaded++;
+#ifdef USE_FREERTOS
+	taskEXIT_CRITICAL();
+#endif
 }
 
 void AudioFile::removeReason(char const* errorCode) {
+	/* Decrement atomically, decide what to do, then act outside the critical
+	 * section (putStealableInQueue acquires the allocator mutex). */
+	enum class Action { none, becameZero, negativeError };
+	Action action = Action::none;
 
+#ifdef USE_FREERTOS
+	taskENTER_CRITICAL();
+#endif
 	numReasonsToBeLoaded--;
 
-	// If it's now zero, it's become unused
 	if (numReasonsToBeLoaded == 0) {
+		action = Action::becameZero;
+	}
+	else if (numReasonsToBeLoaded < 0) {
+		action = Action::negativeError;
+	}
+#ifdef USE_FREERTOS
+	taskEXIT_CRITICAL();
+#endif
+
+	switch (action) {
+	case Action::becameZero:
 		numReasonsDecreasedToZero(errorCode);
 		GeneralMemoryAllocator::get().putStealableInQueue(this, StealableQueue::NO_SONG_AUDIO_FILE_OBJECTS);
-	}
-
-	else if (numReasonsToBeLoaded < 0) {
+		break;
+	case Action::negativeError:
 #if ALPHA_OR_BETA_VERSION
 		FREEZE_WITH_ERROR("E004"); // Luc got this! And Paolo. (Must have been years ago :D)
 #endif
 		numReasonsToBeLoaded = 0; // Save it from crashing
+		break;
+	default:
+		break;
 	}
 }
 

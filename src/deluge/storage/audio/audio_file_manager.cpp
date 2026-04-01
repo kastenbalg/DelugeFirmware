@@ -1439,6 +1439,17 @@ performActionsAndGetOut:
 }
 
 void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* errorCode, bool deletingSong) {
+	/* Decrement and capture the resulting count atomically w.r.t. other tasks.
+	 * We must NOT call mutex-acquiring functions (dealloc, putStealableInQueue)
+	 * inside the critical section — the scheduler is suspended and mutex waits
+	 * would deadlock. So we decide what to do inside, exit, then act. */
+	enum class Action { none, deleteCluster, fileAway, negativeError };
+	Action action = Action::none;
+	bool recorderBug = false;
+
+#ifdef USE_FREERTOS
+	taskENTER_CRITICAL();
+#endif
 	cluster.numReasonsToBeLoaded--;
 
 #ifndef USE_FREERTOS
@@ -1447,43 +1458,50 @@ void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* err
 	}
 #endif
 
-	// If it's now zero, it's become available
 	if (cluster.numReasonsToBeLoaded == 0) {
-
-		// Bug hunting
 		if (ALPHA_OR_BETA_VERSION && cluster.numReasonsHeldBySampleRecorder) {
-			FREEZE_WITH_ERROR("E364");
+			recorderBug = true;
 		}
-
-		// If it's still in the load queue, remove it from there. (We know that it isn't in the process of being
-		// loaded right now because that would have added a "reason", so we wouldn't be here.) also do this on song
-		// swap
-		if (loadingQueue.erase(&cluster) || deletingSong) {
-
-			// Tell its Cluster to forget it exists
+		else if (loadingQueue.erase(&cluster) || deletingSong) {
 			cluster.sample->clusters.getElement(cluster.clusterIndex)->cluster = NULL;
-
-			delete &cluster; // It contains nothing, so completely recycle it
+			action = Action::deleteCluster;
 		}
-
 		else {
-			// It contains data we may want at some future point, so file it away
-			GeneralMemoryAllocator::get().putStealableInAppropriateQueue(&cluster);
+			action = Action::fileAway;
 		}
+	}
+	else if (cluster.numReasonsToBeLoaded < 0) {
+		action = Action::negativeError;
+	}
+#ifdef USE_FREERTOS
+	taskEXIT_CRITICAL();
+#endif
 
-		//*cluster->getAnyReasonsPointer() = ANY_REASONS_NO;
+	/* Now act outside the critical section where mutex acquisition is safe */
+	if (recorderBug) {
+		FREEZE_WITH_ERROR("E364");
 	}
 
-	else if (cluster.numReasonsToBeLoaded < 0) {
+	switch (action) {
+	case Action::deleteCluster:
+		delete &cluster;
+		break;
+	case Action::fileAway:
+		GeneralMemoryAllocator::get().putStealableInAppropriateQueue(&cluster);
+		break;
+	case Action::negativeError:
 #if ALPHA_OR_BETA_VERSION
-		if (cluster.sample != nullptr) { // "Should" always be true...
+		if (cluster.sample != nullptr) {
 			D_PRINTLN("reason remains on cluster of sample:  %d", cluster.sample->filePath.get());
 		}
 		FREEZE_WITH_ERROR(errorCode);
 #else
-		display->displayPopup(errorCode);  // For non testers, just display the error code without freezing
-		cluster->numReasonsToBeLoaded = 0; // Save it from crashing or anything
+		display->displayPopup(errorCode);
+		cluster.numReasonsToBeLoaded = 0;
 #endif
+		break;
+	default:
+		break;
 	}
 }
 

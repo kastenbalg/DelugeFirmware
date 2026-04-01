@@ -25,6 +25,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#ifdef USE_FREERTOS
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
 
 // The universal size of all clusters
 size_t Cluster::size = 32768;
@@ -257,6 +261,9 @@ bool Cluster::mayBeStolen(void* thingNotToStealFrom) {
 }
 
 void Cluster::addReason() {
+#ifdef USE_FREERTOS
+	taskENTER_CRITICAL();
+#endif
 	// If it's going to cease to be zero, it's become unavailable,
 	// so remove it from the stealables queue
 	if (this->numReasonsToBeLoaded == 0) {
@@ -264,4 +271,7 @@ void Cluster::addReason() {
 	}
 
 	this->numReasonsToBeLoaded++;
+#ifdef USE_FREERTOS
+	taskEXIT_CRITICAL();
+#endif
 }
