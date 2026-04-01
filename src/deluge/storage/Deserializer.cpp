@@ -264,6 +264,16 @@ char const* XMLDeserializer::readNextTagOrAttributeName() {
 #endif
 		break;
 
+	case PAST_ATTRIBUTE_NAME:
+	case PAST_EQUALS_SIGN:
+		/* Previous caller didn't consume its attribute value.
+		 * Consume it so parsing can continue. */
+		if (getIntoAttributeValue()) {
+			skipUntilChar(charAtEndOfValue);
+		}
+		xmlArea = IN_TAG_PAST_NAME;
+		// No break
+
 	case IN_ATTRIBUTE_VALUE: // Could have been left here during a char-at-a-time read
 		skipUntilChar(charAtEndOfValue);
 		xmlArea = IN_TAG_PAST_NAME;
