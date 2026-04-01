@@ -48,12 +48,20 @@ typedef struct {
 /* Create a mutex using caller-provided static storage. Returns the handle. */
 rtos_mutex_t rtos_mutex_create(rtos_mutex_storage_t* storage);
 
+/* Create a recursive mutex — same task can lock multiple times without deadlock.
+ * Must be unlocked the same number of times. Uses priority inheritance. */
+rtos_mutex_t rtos_mutex_create_recursive(rtos_mutex_storage_t* storage);
+
 /* Block until the mutex is acquired.
  * Uses priority inheritance to prevent unbounded inversion. */
 void rtos_mutex_lock(rtos_mutex_t mutex);
 
 /* Release the mutex. */
 void rtos_mutex_unlock(rtos_mutex_t mutex);
+
+/* Lock/unlock for recursive mutexes — same task can lock multiple times. */
+void rtos_mutex_lock_recursive(rtos_mutex_t mutex);
+void rtos_mutex_unlock_recursive(rtos_mutex_t mutex);
 
 /* Try to acquire the mutex without blocking. Returns true if acquired. */
 bool rtos_mutex_trylock(rtos_mutex_t mutex);

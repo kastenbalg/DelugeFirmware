@@ -40,6 +40,10 @@ rtos_mutex_t rtos_mutex_create(rtos_mutex_storage_t* storage) {
 	return xSemaphoreCreateMutexStatic((StaticSemaphore_t*)storage);
 }
 
+rtos_mutex_t rtos_mutex_create_recursive(rtos_mutex_storage_t* storage) {
+	return xSemaphoreCreateRecursiveMutexStatic((StaticSemaphore_t*)storage);
+}
+
 void rtos_mutex_lock(rtos_mutex_t mutex) {
 	if (!schedulerRunning()) {
 		return;
@@ -52,6 +56,20 @@ void rtos_mutex_unlock(rtos_mutex_t mutex) {
 		return;
 	}
 	xSemaphoreGive((SemaphoreHandle_t)mutex);
+}
+
+void rtos_mutex_lock_recursive(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return;
+	}
+	xSemaphoreTakeRecursive((SemaphoreHandle_t)mutex, portMAX_DELAY);
+}
+
+void rtos_mutex_unlock_recursive(rtos_mutex_t mutex) {
+	if (!schedulerRunning()) {
+		return;
+	}
+	xSemaphoreGiveRecursive((SemaphoreHandle_t)mutex);
 }
 
 bool rtos_mutex_trylock(rtos_mutex_t mutex) {

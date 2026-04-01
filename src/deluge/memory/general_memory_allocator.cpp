@@ -47,7 +47,7 @@ GeneralMemoryAllocator::GeneralMemoryAllocator()
 #endif
 {
 #ifdef USE_FREERTOS
-	allocMutex = rtos_mutex_create(&allocMutexStorage);
+	allocMutex = rtos_mutex_create_recursive(&allocMutexStorage);
 #endif
 	uint32_t external_small_end = EXTERNAL_MEMORY_END;
 	uint32_t external_small_start = external_small_end - RESERVED_EXTERNAL_SMALL_ALLOCATOR;
@@ -90,15 +90,10 @@ GeneralMemoryAllocator::GeneralMemoryAllocator()
 volatile uint32_t allocMutexContentionCount = 0;
 
 void GeneralMemoryAllocator::lockMutex() {
-	/* Try to take the mutex without blocking first. If it fails,
-	 * we know there's contention — count it, then block. */
-	if (!rtos_mutex_trylock(allocMutex)) {
-		allocMutexContentionCount++;
-		rtos_mutex_lock(allocMutex);
-	}
+	rtos_mutex_lock_recursive(allocMutex);
 }
 void GeneralMemoryAllocator::unlockMutex() {
-	rtos_mutex_unlock(allocMutex);
+	rtos_mutex_unlock_recursive(allocMutex);
 }
 #endif
 
@@ -170,11 +165,16 @@ static void* allocInternalUnlocked(MemoryRegion* regions, uint32_t requiredSize)
 	return address;
 }
 
-/* Public locked entry points */
+/* Public locked entry points.
+ * Under FreeRTOS, a recursive mutex handles both cross-task serialization
+ * and same-task re-entrancy. No pre-mutex lock check needed.
+ * Under non-FreeRTOS, the boolean `lock` prevents re-entrancy. */
 void* GeneralMemoryAllocator::allocExternal(uint32_t requiredSize) {
+#ifndef USE_FREERTOS
 	if (lock) {
 		return nullptr;
 	}
+#endif
 	lockMutex();
 	lock = true;
 	void* address = allocExternalUnlocked(regions, requiredSize);
@@ -184,9 +184,11 @@ void* GeneralMemoryAllocator::allocExternal(uint32_t requiredSize) {
 }
 
 void* GeneralMemoryAllocator::allocInternal(uint32_t requiredSize) {
+#ifndef USE_FREERTOS
 	if (lock) {
 		return nullptr;
 	}
+#endif
 	lockMutex();
 	lock = true;
 	void* address = allocInternalUnlocked(regions, requiredSize);
@@ -207,10 +209,11 @@ void GeneralMemoryAllocator::deallocExternal(void* address) {
 void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam, bool makeStealable,
                                     void* thingNotToStealFrom) {
 
+#ifndef USE_FREERTOS
 	if (lock) {
-		return nullptr; // Prevent any weird loops in freeSomeStealableMemory(), which mostly would only be bad cos they
-		                // could extend the stack an unspecified amount
+		return nullptr; // Prevent any weird loops in freeSomeStealableMemory()
 	}
+#endif
 
 	lockMutex();
 	lock = true;
@@ -313,9 +316,11 @@ void GeneralMemoryAllocator::extend(void* address, uint32_t minAmountToExtend, u
 	*getAmountExtendedLeft = 0;
 	*getAmountExtendedRight = 0;
 
+#ifndef USE_FREERTOS
 	if (lock) {
 		return;
 	}
+#endif
 
 	lockMutex();
 	lock = true;

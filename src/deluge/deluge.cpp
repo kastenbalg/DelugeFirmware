@@ -1165,10 +1165,24 @@ extern "C" void routineWithClusterLoading() {
 }
 
 void deleteOldSongBeforeLoadingNew() {
-	/* Note: under FreeRTOS, the cluster loader is suspended by the caller
-	 * (LoadSongUI::performLoad) before this function is called. This prevents
-	 * the loader from accessing freed memory during song deletion. */
+#ifdef USE_FREERTOS
+	/* Null currentSong FIRST so the audio/sequencer tasks (which check for
+	 * nullptr) stop dereferencing it immediately. Without this, a higher-priority
+	 * task can preempt mid-teardown and access partially-destroyed state. */
+	Song* toDelete = currentSong;
+	currentSong = nullptr;
 
+	toDelete->stopAllAuditioning();
+	AudioEngine::killAllVoices(true);
+
+	view.activeModControllableModelStack.modControllable = nullptr;
+	view.activeModControllableModelStack.setTimelineCounter(nullptr);
+	view.activeModControllableModelStack.paramManager = nullptr;
+
+	void* toDealloc = dynamic_cast<void*>(toDelete);
+	toDelete->~Song();
+	delugeDealloc(toDealloc);
+#else
 	currentSong->stopAllAuditioning();
 
 	AudioEngine::killAllVoices(true); // Need to do this now that we're not bothering getting the old Song's
@@ -1182,7 +1196,8 @@ void deleteOldSongBeforeLoadingNew() {
 	currentSong = nullptr;
 	void* toDealloc = dynamic_cast<void*>(toDelete);
 	toDelete->~Song();
-	delugeDealloc(toDelete);
+	delugeDealloc(toDealloc);
+#endif
 }
 
 #if ALLOW_SPAM_MODE

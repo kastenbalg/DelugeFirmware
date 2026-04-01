@@ -100,10 +100,10 @@ public:
 	MemoryRegion regions[NUM_MEMORY_REGIONS];
 	// only used for managing stealables (audio files that we could deallocate and re load from sd later if needed)
 	CacheManager cacheManager;
-	bool lock; /* re-entrancy guard for freeSomeStealableMemory() — kept alongside mutex */
+	bool lock; /* cooperative-era re-entrancy guard, unused under FreeRTOS */
 #ifdef USE_FREERTOS
 	rtos_mutex_storage_t allocMutexStorage;
-	rtos_mutex_t allocMutex;
+	rtos_mutex_t allocMutex; /* recursive mutex — same task can re-enter, different tasks block */
 	void lockMutex();
 	void unlockMutex();
 #else
