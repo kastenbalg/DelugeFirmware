@@ -334,11 +334,14 @@ static void handleCmdResponse(void) {
 	/* Enable "All end" and error interrupts */
 	_sd_set_int_mask(hndl, SD_INFO1_MASK_DATA_TRNS, SD_INFO2_MASK_ERR);
 
-	/* Invalidate cache for the full read buffer before DMA writes into it */
+	/* Clean+invalidate cache for the full read buffer before DMA writes into it.
+	 * Must use clean+inv (not plain inv): plain inv has a race where dirty L1
+	 * lines evicted to L2 between the L2 inv and L1 inv steps will later be
+	 * written back to SDRAM, overwriting the DMA data. */
 	long transferBytes = (long)sState.sectorsRemaining * 512;
 	bool isRead = (sState.currentReq->type != SD_REQ_WRITE);
 	if (isRead) {
-		v7_dma_inv_range((uintptr_t)sState.currentBuffer, (uintptr_t)(sState.currentBuffer + transferBytes));
+		v7_dma_clean_inv_range((uintptr_t)sState.currentBuffer, (uintptr_t)(sState.currentBuffer + transferBytes));
 	}
 
 	/* Initialize DMAC for the full multi-block transfer */

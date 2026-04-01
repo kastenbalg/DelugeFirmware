@@ -49,7 +49,7 @@ v7_l1_dma_inv_range:
          add     r0, r0, r2
          cmp     r0, r1
          blo     1b
-         dsb     st
+         dsb
          bx     lr
 	.endfunc
 

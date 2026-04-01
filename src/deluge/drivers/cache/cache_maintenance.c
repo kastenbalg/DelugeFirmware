@@ -101,3 +101,31 @@ void v7_dma_flush_range(uintptr_t start, uintptr_t end) {
 	v7_l1_dma_flush_range(start, end);
 	l2c_clean_range(start, end);
 }
+
+/*
+ * Pre-DMA clean+invalidate for DMA destination buffers (device writes to memory).
+ * Call INSTEAD of v7_dma_inv_range before starting a read DMA.
+ *
+ * Plain invalidate (v7_dma_inv_range) has a race: dirty L1 lines can be evicted
+ * to L2 between the L2 invalidation and L1 invalidation steps, and those dirty
+ * L2 lines are later written back to SDRAM, overwriting the DMA data.
+ *
+ * Sequence per PL310 TRM §3.3.10 Clean-and-Invalidate for non-exclusive cache:
+ *   1. Clean L1 (push dirty lines to L2)
+ *   2. DSB
+ *   3. Clean+Inv L2 (push dirty L2 lines to SDRAM, mark L2 invalid)
+ *   4. CACHE SYNC
+ *   5. Inv L1 second pass (catches any L1 refills that occurred during step 3)
+ *   6. DSB
+ *
+ * After this sequence L1 and L2 are both clean+invalid for the range.
+ * Any L1 evictions during the subsequent DMA are clean (no write-back), so
+ * they cannot overwrite the DMA data in SDRAM.
+ *
+ * Call v7_dma_inv_range after DMA completes as normal.
+ */
+void v7_dma_clean_inv_range(uintptr_t start, uintptr_t end) {
+	v7_l1_dma_flush_range(start, end); /* step 1+2: L1 clean, DSB */
+	l2c_clean_inv_range(start, end);   /* step 3+4: L2 clean+inv, CACHE_SYNC */
+	v7_l1_dma_inv_range(start, end);   /* step 5+6: L1 second-pass inv, DSB */
+}

@@ -477,8 +477,8 @@ void usb_cstd_DmaxInt(usb_utr_t* ptr, uint16_t pipemode)
                         /* check FIFO_EMPTY / INBUF bit */
                         if ((usb_creg_read_pipectr(ip, pipe) & USB_INBUFM) != USB_INBUFM)
                         {
-                            L2CacheCleanInvalidateAll();
                             L1_D_CacheWritebackFlushAll();
+                            L2CacheCleanInvalidateAll();
                     /* DMA transfer function end. call callback function */
 
 #if ((USB_CFG_MODE & USB_CFG_HOST) == USB_CFG_HOST)
