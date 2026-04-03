@@ -661,7 +661,7 @@ getOut:
 				goto getOut;
 			}
 
-			void* drumMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(SoundDrum));
+			void* drumMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundDrum));
 			if (!drumMemory) {
 ramError:
 				error = Error::INSUFFICIENT_RAM;

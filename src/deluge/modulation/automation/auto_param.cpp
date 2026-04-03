@@ -2787,7 +2787,7 @@ void AutoParam::stealNodes(ModelStackWithAutoParam const* modelStack, int32_t po
 				action->recordParamChangeIfNotAlreadySnapshotted(modelStack);
 			}
 
-			void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(numNodesToStealTotal * sizeof(ParamNode));
+			void* memory = GeneralMemoryAllocator::get().allocLowSpeed(numNodesToStealTotal * sizeof(ParamNode));
 			if (memory) {
 				ParamNode* stolenNodes = (ParamNode*)memory;
 				stolenNodeRecord->nodes = stolenNodes;

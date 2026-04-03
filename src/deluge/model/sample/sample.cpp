@@ -304,7 +304,7 @@ Error Sample::fillPercCache(TimeStretcher* timeStretcher, int32_t startPosSample
 			numPercCacheClusters = ((lengthInSamplesAfterReduction - 1) >> Cluster::size_magnitude)
 			                       + 1; // Stores this number for the future too
 			int32_t memorySize = numPercCacheClusters * sizeof(Cluster*);
-			percCacheClusters[reversed] = (Cluster**)GeneralMemoryAllocator::get().allocMaxSpeed(memorySize);
+			percCacheClusters[reversed] = (Cluster**)GeneralMemoryAllocator::get().allocLowSpeed(memorySize);
 			if (!percCacheClusters[reversed]) {
 				LOCK_EXIT
 				return Error::INSUFFICIENT_RAM;
@@ -1285,7 +1285,7 @@ float Sample::determinePitch(bool doingSingleCycle, float minFreqHz, float maxFr
 	int32_t fftOutputSize = ((kPitchDetectWindowSize >> 1) + 1) * sizeof(ne10_fft_cpx_int32_t);
 	int32_t floatIndexTableSize = (kPitchDetectWindowSize >> 2) * sizeof(float);
 	int32_t* fftInput =
-	    (int32_t*)GeneralMemoryAllocator::get().allocMaxSpeed(fftInputSize + fftOutputSize + floatIndexTableSize);
+	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(fftInputSize + fftOutputSize + floatIndexTableSize);
 	if (!fftInput) {
 		return 0;
 	}

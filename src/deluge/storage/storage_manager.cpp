@@ -622,7 +622,7 @@ Instrument* StorageManager::createNewInstrument(OutputType newOutputType, ParamM
 		instrumentSize = sizeof(Kit);
 	}
 
-	void* instrumentMemory = GeneralMemoryAllocator::get().allocMaxSpeed(instrumentSize);
+	void* instrumentMemory = GeneralMemoryAllocator::get().allocLowSpeed(instrumentSize);
 	if (!instrumentMemory) {
 		return nullptr;
 	}
@@ -699,7 +699,7 @@ Drum* StorageManager::createNewDrum(DrumType drumType) {
 		memorySize = sizeof(GateDrum);
 	}
 
-	void* drumMemory = GeneralMemoryAllocator::get().allocMaxSpeed(memorySize);
+	void* drumMemory = GeneralMemoryAllocator::get().allocLowSpeed(memorySize);
 	if (!drumMemory) {
 		return nullptr;
 	}

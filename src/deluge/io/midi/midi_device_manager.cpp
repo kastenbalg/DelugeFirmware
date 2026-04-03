@@ -152,7 +152,7 @@ MIDICableUSBHosted* getOrCreateHostedMIDIDeviceFromDetails(String* name, uint16_
 
 	SpecificMidiDeviceType devType = getSpecificMidiDeviceType(vendorId, productId);
 	if (devType == SpecificMidiDeviceType::LUMI_KEYS) {
-		void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(MIDIDeviceLumiKeys));
+		void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDIDeviceLumiKeys));
 		if (!memory) {
 			return nullptr;
 		}
@@ -161,7 +161,7 @@ MIDICableUSBHosted* getOrCreateHostedMIDIDeviceFromDetails(String* name, uint16_
 		device = instDevice;
 	}
 	else {
-		void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(MIDICableUSBHosted));
+		void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDICableUSBHosted));
 		if (!memory) {
 			return nullptr;
 		}

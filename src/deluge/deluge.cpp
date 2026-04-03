@@ -459,7 +459,7 @@ void setUIForLoadedSong(Song* song) {
 }
 
 void setupBlankSong() {
-	void* songMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(Song)); // TODO: error checking
+	void* songMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Song)); // TODO: error checking
 	preLoadedSong = new (songMemory) Song();
 
 	preLoadedSong->paramManager.setupUnpatched(); // TODO: error checking
@@ -549,7 +549,7 @@ void setupStartupSong() {
 			}
 		}
 		// Load song, if we got this far!
-		void* songMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(Song));
+		void* songMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Song));
 		currentSong->setSongFullPath(filename);
 		if (openUI(&loadSongUI)) {
 			loadSongUI.performLoad();

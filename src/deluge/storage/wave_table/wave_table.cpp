@@ -304,7 +304,7 @@ gotError2:
 	int32_t currentCycleMemorySize = std::max(rawFileCycleSize, initialBandCycleSizeNoDuplicates);
 	// Internal RAM is good, and it's only temporary
 	int32_t* __restrict__ currentCycleInt32 =
-	    (int32_t*)GeneralMemoryAllocator::get().allocMaxSpeed(currentCycleMemorySize * sizeof(int32_t));
+	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(currentCycleMemorySize * sizeof(int32_t));
 	if (!currentCycleInt32) {
 		error = Error::INSUFFICIENT_RAM;
 		goto gotError2;
@@ -314,7 +314,7 @@ gotError2:
 	// use that same decision here
 	// - except for frequency-domain complex numbers, we only need to store half of it, plus one.
 	ne10_fft_cpx_int32_t* __restrict__ frequencyDomainData =
-	    (ne10_fft_cpx_int32_t*)GeneralMemoryAllocator::get().allocMaxSpeed(((currentCycleMemorySize >> 1) + 1)
+	    (ne10_fft_cpx_int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(((currentCycleMemorySize >> 1) + 1)
 	                                                                       * sizeof(ne10_fft_cpx_int32_t));
 	if (!frequencyDomainData) {
 		error = Error::INSUFFICIENT_RAM;

@@ -1683,7 +1683,7 @@ Clip* SessionView::createNewAudioClip(int32_t yDisplay) {
 	actionLogger.deleteAllLogs();
 
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(AudioClip));
+	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
 	if (clipMemory == nullptr) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -1718,7 +1718,7 @@ Clip* SessionView::createNewInstrumentClip(OutputType outputType, int32_t yDispl
 	actionLogger.deleteAllLogs();
 
 	// Allocate memory for instrument clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(InstrumentClip));
+	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
 	if (clipMemory == nullptr) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -3520,7 +3520,7 @@ bool SessionView::createNewTrackForInstrumentClip(OutputType type, InstrumentCli
 
 AudioClip* SessionView::gridCreateAudioClipWithNewTrack() {
 	// Allocate new clip
-	void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(AudioClip));
+	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
 	if (!memory) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -3542,7 +3542,7 @@ AudioClip* SessionView::gridCreateAudioClipWithNewTrack() {
 
 InstrumentClip* SessionView::gridCreateInstrumentClipWithNewTrack(OutputType type) {
 	// Allocate new clip
-	void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(InstrumentClip));
+	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
 	if (!memory) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;

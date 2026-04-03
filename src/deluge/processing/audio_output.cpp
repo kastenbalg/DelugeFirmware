@@ -376,7 +376,7 @@ void AudioOutput::deleteBackedUpParamManagers(Song* song) {
 Clip* AudioOutput::createNewClipForArrangementRecording(ModelStack* modelStack) {
 
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(AudioClip));
+	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
 	if (!clipMemory) {
 		return nullptr;
 	}

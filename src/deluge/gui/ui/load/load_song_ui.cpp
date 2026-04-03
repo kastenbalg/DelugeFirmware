@@ -376,7 +376,7 @@ void LoadSongUI::performLoad() {
 	}
 
 	terminate_set_context("TLD6"); /* Terminate during song load - alloc Song */
-	void* songMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(Song));
+	void* songMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Song));
 	terminate_set_context("TD6A"); /* alloc returned */
 	if (!songMemory) {
 		/* Diagnostic: display sizeof(Song) on 7-seg so we can see it.

@@ -5417,7 +5417,7 @@ doDisplayError:
 		return;
 	}
 
-	void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(SoundDrum));
+	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundDrum));
 	if (!memory) {
 		error = Error::INSUFFICIENT_RAM;
 		goto doDisplayError;

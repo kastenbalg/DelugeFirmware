@@ -150,7 +150,7 @@ void InstrumentClip::copyBasicsFrom(Clip const* otherClip) {
 // Will replace the Clip in the modelStack, if success.
 Error InstrumentClip::clone(ModelStackWithTimelineCounter* modelStack, bool shouldFlattenReversing) const {
 
-	void* clipMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(InstrumentClip));
+	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
 	if (!clipMemory) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -2695,7 +2695,7 @@ someError:
 		else if (!strcmp(tagName, "sound") || !strcmp(tagName, "synth")) {
 			if (!output) {
 				{
-					void* instrumentMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(SoundInstrument));
+					void* instrumentMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundInstrument));
 					if (!instrumentMemory) {
 						goto ramError;
 					}
@@ -2731,7 +2731,7 @@ loadInstrument:
 		// For song files from before V2.0, where Instruments were stored within the Clip
 		else if (!strcmp(tagName, "kit")) {
 			if (!output) {
-				void* instrumentMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(Kit));
+				void* instrumentMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Kit));
 				if (!instrumentMemory) {
 					goto ramError;
 				}
@@ -3914,7 +3914,7 @@ Error InstrumentClip::claimOutput(ModelStackWithTimelineCounter* modelStack) {
 				thisNoteRow->drum = kit->getGateDrumForChannel(gateChannel);
 
 				if (!thisNoteRow->drum) {
-					void* drumMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(GateDrum));
+					void* drumMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(GateDrum));
 					if (!drumMemory) {
 						return Error::INSUFFICIENT_RAM;
 					}
@@ -4236,7 +4236,7 @@ void InstrumentClip::finishLinearRecording(ModelStackWithTimelineCounter* modelS
 Clip* InstrumentClip::cloneAsNewOverdub(ModelStackWithTimelineCounter* modelStack, OverDubType newOverdubNature) {
 
 	// Allocate memory for Clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(InstrumentClip));
+	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
 	if (!clipMemory) {
 ramError:
 		display->displayError(Error::INSUFFICIENT_RAM);
