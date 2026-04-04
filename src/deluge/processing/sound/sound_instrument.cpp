@@ -416,7 +416,23 @@ int32_t SoundInstrument::doTickForwardForArp(ModelStack* modelStack, int32_t cur
 #ifdef USE_FREERTOS
 	if (!isAudioTask()) {
 		voiceEventArpTick(this, currentPos);
-		return 2147483647; // actual timing handled by audio task's arp->render()
+
+		/* Return correct ticks-til-next-arp-event so the sequencer schedules
+		 * a swung tick at the next arp boundary. The actual arp processing
+		 * happens on the audio task via the ARP_TICK event above. */
+		ArpeggiatorSettings* arpSettings = getArpSettings();
+		if (arpSettings != nullptr && arpSettings->mode != ArpMode::OFF && arpSettings->syncLevel != 0) {
+			uint32_t ticksPerPeriod = 3 << (9 - arpSettings->syncLevel);
+			if (arpSettings->syncType == SYNC_TYPE_TRIPLET) {
+				ticksPerPeriod = ticksPerPeriod * 2 / 3;
+			}
+			else if (arpSettings->syncType == SYNC_TYPE_DOTTED) {
+				ticksPerPeriod = ticksPerPeriod * 3 / 2;
+			}
+			int32_t howFarIntoPeriod = currentPos % ticksPerPeriod;
+			return howFarIntoPeriod ? (ticksPerPeriod - howFarIntoPeriod) : ticksPerPeriod;
+		}
+		return 2147483647;
 	}
 #endif
 	if (!activeClip) {

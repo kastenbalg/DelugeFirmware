@@ -1131,6 +1131,21 @@ int32_t Kit::doTickForwardForArp(ModelStack* modelStack, int32_t currentPos) {
 #ifdef USE_FREERTOS
 	if (!isAudioTask()) {
 		voiceEventKitArpTick(this, currentPos);
+
+		/* Return correct ticks-til-next-arp-event so the sequencer schedules
+		 * a swung tick at the next arp boundary. */
+		ArpeggiatorSettings* arpSettings = getArpSettings();
+		if (arpSettings != nullptr && arpSettings->mode != ArpMode::OFF && arpSettings->syncLevel != 0) {
+			uint32_t ticksPerPeriod = 3 << (9 - arpSettings->syncLevel);
+			if (arpSettings->syncType == SYNC_TYPE_TRIPLET) {
+				ticksPerPeriod = ticksPerPeriod * 2 / 3;
+			}
+			else if (arpSettings->syncType == SYNC_TYPE_DOTTED) {
+				ticksPerPeriod = ticksPerPeriod * 3 / 2;
+			}
+			int32_t howFarIntoPeriod = currentPos % ticksPerPeriod;
+			return howFarIntoPeriod ? (ticksPerPeriod - howFarIntoPeriod) : ticksPerPeriod;
+		}
 		return 2147483647;
 	}
 #endif
