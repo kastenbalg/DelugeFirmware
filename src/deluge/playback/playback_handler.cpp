@@ -42,7 +42,7 @@
 #include "io/midi/midi_engine.h"
 #include "io/midi/midi_follow.h"
 #include "io/midi/midi_transpose.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
@@ -2482,7 +2482,7 @@ void PlaybackHandler::grabTempoFromClip(Clip* clip) {
 	// other stuff
 	if (action) {
 
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceTempoChange));
+		void* consMemory = allocExternal(sizeof(ConsequenceTempoChange));
 
 		if (consMemory) {
 			ConsequenceTempoChange* newConsequence =
@@ -2517,7 +2517,7 @@ uint32_t PlaybackHandler::setTempoFromAudioClipLength(uint64_t loopLengthSamples
 	// other stuff
 	if (action) {
 
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceTempoChange));
+		void* consMemory = allocExternal(sizeof(ConsequenceTempoChange));
 
 		if (consMemory) {
 			ConsequenceTempoChange* newConsequence =
@@ -2603,7 +2603,7 @@ void PlaybackHandler::finishTempolessRecording(bool shouldStartPlaybackAgain, in
 		// And remember that this tempoless-record Action included beginning playback, so undoing / redoing it later
 		// will stop and start playback respectively
 		if (action) {
-			void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceBeginPlayback));
+			void* consMemory = allocExternal(sizeof(ConsequenceBeginPlayback));
 
 			if (consMemory) {
 				ConsequenceBeginPlayback* newConsequence = new (consMemory) ConsequenceBeginPlayback();

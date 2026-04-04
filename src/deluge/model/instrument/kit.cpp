@@ -27,7 +27,7 @@
 #include "io/midi/midi_device.h"
 #include "io/midi/midi_device_manager.h"
 #include "io/midi/midi_engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/instrument_clip.h"
 #include "model/drum/drum.h"
 #include "model/drum/gate_drum.h"

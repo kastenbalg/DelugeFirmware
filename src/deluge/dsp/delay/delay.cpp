@@ -20,7 +20,7 @@
 #include "dsp/delay/delay_buffer.h"
 #include "dsp/stereo_sample.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sync.h"
 #include "processing/engines/audio_engine.h"
 #include <cstdlib>
@@ -272,7 +272,7 @@ void Delay::process(std::span<StereoSample> buffer, const State& delayWorkingSta
 
 	std::span<StereoSample> working_buffer{reinterpret_cast<StereoSample*>(spareRenderingBuffer[0]), buffer.size()};
 
-	GeneralMemoryAllocator::get().checkStack("delay");
+	checkStack("delay");
 
 	StereoSample* primaryBufferOldPos;
 	uint32_t primaryBufferOldLongPos;

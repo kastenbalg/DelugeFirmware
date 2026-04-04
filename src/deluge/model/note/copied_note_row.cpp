@@ -16,7 +16,7 @@
  */
 
 #include "model/note/copied_note_row.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 
 CopiedNoteRow::CopiedNoteRow() {
 	next = nullptr;

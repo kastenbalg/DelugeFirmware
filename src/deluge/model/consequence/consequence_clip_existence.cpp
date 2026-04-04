@@ -19,7 +19,7 @@
 #include "definitions_cxx.hpp"
 #include "hid/display/display.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_array.h"
 #include "model/clip/instrument_clip.h"

@@ -52,7 +52,7 @@
 #include "io/debug/log.h"
 #include "io/midi/device_specific/specific_midi_device.h"
 #include "io/midi/midi_follow.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip.h"
@@ -1683,7 +1683,7 @@ Clip* SessionView::createNewAudioClip(int32_t yDisplay) {
 	actionLogger.deleteAllLogs();
 
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* clipMemory = allocExternal(sizeof(AudioClip));
 	if (clipMemory == nullptr) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -1718,7 +1718,7 @@ Clip* SessionView::createNewInstrumentClip(OutputType outputType, int32_t yDispl
 	actionLogger.deleteAllLogs();
 
 	// Allocate memory for instrument clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(sizeof(InstrumentClip));
 	if (clipMemory == nullptr) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -3520,7 +3520,7 @@ bool SessionView::createNewTrackForInstrumentClip(OutputType type, InstrumentCli
 
 AudioClip* SessionView::gridCreateAudioClipWithNewTrack() {
 	// Allocate new clip
-	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* memory = allocExternal(sizeof(AudioClip));
 	if (!memory) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
@@ -3542,7 +3542,7 @@ AudioClip* SessionView::gridCreateAudioClipWithNewTrack() {
 
 InstrumentClip* SessionView::gridCreateInstrumentClipWithNewTrack(OutputType type) {
 	// Allocate new clip
-	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* memory = allocExternal(sizeof(InstrumentClip));
 	if (!memory) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;

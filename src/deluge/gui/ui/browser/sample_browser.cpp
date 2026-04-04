@@ -46,7 +46,7 @@
 #include "hid/led/indicator_leds.h"
 #include "hid/led/pad_leds.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/instrument_clip.h"
@@ -1361,7 +1361,7 @@ removeReasonsFromSamplesAndGetOut:
 	// If all samples were tagged with the same MIDI note, we get suspicious and delete them.
 	bool discardingMIDINoteFromFile = (numSamples > 1 && commonMIDINote >= 0);
 
-	Sample** sortArea = (Sample**)GeneralMemoryAllocator::get().allocLowSpeed(numSamples * sizeof(Sample*) * 2);
+	Sample** sortArea = (Sample**)allocExternal(numSamples * sizeof(Sample*) * 2);
 	if (!sortArea) {
 		error = Error::INSUFFICIENT_RAM;
 		goto removeReasonsFromSamplesAndGetOut;
@@ -1959,7 +1959,7 @@ getOut:
 					goto getOut;
 				}
 
-				void* drumMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundDrum));
+				void* drumMemory = allocExternal(sizeof(SoundDrum));
 				if (!drumMemory) {
 					goto getOut;
 				}

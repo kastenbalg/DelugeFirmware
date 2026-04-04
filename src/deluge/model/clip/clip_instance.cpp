@@ -16,7 +16,7 @@
  */
 
 #include "model/clip/clip_instance.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action.h"
 #include "model/clip/instrument_clip.h"
 #include "model/consequence/consequence_clip_instance_change.h"
@@ -38,7 +38,7 @@ RGB ClipInstance::getColour() {
 
 void ClipInstance::change(Action* action, Output* output, int32_t newPos, int32_t newLength, Clip* newClip) {
 	if (action) {
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipInstanceChange));
+		void* consMemory = allocExternal(sizeof(ConsequenceClipInstanceChange));
 
 		if (consMemory) {
 			ConsequenceClipInstanceChange* newConsequence =

@@ -21,7 +21,7 @@
 #include "drivers/mtu/mtu.h"
 #include "hid/display/display.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "util/functions.h"
 
 OrderedResizeableArray::OrderedResizeableArray(int32_t newElementSize, int32_t keyNumBits, int32_t newKeyOffset,
@@ -282,10 +282,8 @@ void OrderedResizeableArray::testSequentiality(char const* errorCode) {
 void OrderedResizeableArrayWith32bitKey::testSearchMultiple() {
 	insertAtIndex(0, TEST_SEARCH_MULTIPLE_NUM_ITEMS);
 
-	int32_t* searchPos =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(TEST_SEARCH_MULTIPLE_NUM_SEARCH_TERMS * sizeof(int32_t));
-	int32_t* resultingIndexes =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(TEST_SEARCH_MULTIPLE_NUM_SEARCH_TERMS * sizeof(int32_t));
+	int32_t* searchPos = (int32_t*)allocExternal(TEST_SEARCH_MULTIPLE_NUM_SEARCH_TERMS * sizeof(int32_t));
+	int32_t* resultingIndexes = (int32_t*)allocExternal(TEST_SEARCH_MULTIPLE_NUM_SEARCH_TERMS * sizeof(int32_t));
 
 	while (true) {
 

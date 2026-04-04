@@ -34,7 +34,7 @@
 #include "hid/matrix/matrix_driver.h"
 #include "io/midi/device_specific/specific_midi_device.h"
 #include "io/midi/midi_engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_instance.h"
@@ -379,7 +379,7 @@ bool Song::ensureAtLeastOneSessionClip() {
 		return false;
 	}
 
-	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* memory = allocExternal(sizeof(InstrumentClip));
 	InstrumentClip* firstClip = new (memory) InstrumentClip(this);
 
 	sessionClips.insertClipAtIndex(firstClip, 0);
@@ -1908,7 +1908,7 @@ unknownTag:
 					Error error;
 
 					if (!strcmp(tagName, "audioTrack")) {
-						memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioOutput));
+						memory = allocExternal(sizeof(AudioOutput));
 						if (!memory) {
 							return Error::INSUFFICIENT_RAM;
 						}
@@ -1918,7 +1918,7 @@ unknownTag:
 					}
 
 					else if (!strcmp(tagName, "sound")) {
-						memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundInstrument));
+						memory = allocExternal(sizeof(SoundInstrument));
 						if (!memory) {
 							return Error::INSUFFICIENT_RAM;
 						}
@@ -1950,7 +1950,7 @@ loadOutput:
 					}
 
 					else if (!strcmp(tagName, "kit")) {
-						memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Kit));
+						memory = allocExternal(sizeof(Kit));
 						if (!memory) {
 							return Error::INSUFFICIENT_RAM;
 						}
@@ -1963,7 +1963,7 @@ loadOutput:
 					// used. The distinction is later in a different tag which can be "midiChannel" or "zone"
 					else if (!strcmp(tagName, "midi") || !strcmp(tagName, "midiChannel")
 					         || !strcmp(tagName, "mpeZone")) {
-						memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDIInstrument));
+						memory = allocExternal(sizeof(MIDIInstrument));
 						if (!memory) {
 							return Error::INSUFFICIENT_RAM;
 						}
@@ -1972,7 +1972,7 @@ loadOutput:
 					}
 
 					else if (!strcmp(tagName, "cvChannel")) {
-						memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(CVInstrument));
+						memory = allocExternal(sizeof(CVInstrument));
 						if (!memory) {
 							return Error::INSUFFICIENT_RAM;
 						}
@@ -2272,7 +2272,7 @@ readClip:
 				return Error::INSUFFICIENT_RAM;
 			}
 
-			void* memory = GeneralMemoryAllocator::get().allocLowSpeed(allocationSize);
+			void* memory = allocExternal(allocationSize);
 			if (!memory) {
 				return Error::INSUFFICIENT_RAM;
 			}
@@ -5032,7 +5032,7 @@ AudioOutput* Song::createNewAudioOutput(Output* replaceOutput) {
 		return nullptr;
 	}
 
-	void* outputMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioOutput));
+	void* outputMemory = allocExternal(sizeof(AudioOutput));
 	if (!outputMemory) {
 		return nullptr;
 	}
@@ -5514,7 +5514,7 @@ void Song::swapClips(Clip* newClip, Clip* oldClip, int32_t clipIndex) {
 Clip* Song::replaceInstrumentClipWithAudioClip(Clip* oldClip, int32_t clipIndex) {
 
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* clipMemory = allocExternal(sizeof(AudioClip));
 	if (!clipMemory) {
 		return nullptr;
 	}

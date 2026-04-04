@@ -1,4 +1,3 @@
-#ifndef USE_FREERTOS
 /*
  * Copyright © 2015-2023 Synthstrom Audible Limited
  *
@@ -16,6 +15,7 @@
  * If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifdef USE_FREERTOS
 #include "memory/general_memory_allocator.h"
 
 #include "definitions_cxx.hpp"
@@ -40,23 +40,15 @@ extern uint32_t __heap_end;
 extern uint32_t program_stack_start;
 extern uint32_t program_stack_end;
 // NOLINTEND
-GeneralMemoryAllocator::GeneralMemoryAllocator()
-    : lock(false)
-#ifdef USE_FREERTOS
-      ,
-      allocMutex(nullptr)
-#endif
-{
-#ifdef USE_FREERTOS
+
+GeneralMemoryAllocator::GeneralMemoryAllocator() : lock(false), allocMutex(nullptr) {
 	allocMutex = rtos_mutex_create_recursive(&allocMutexStorage);
-#endif
 	uint32_t external_small_end = EXTERNAL_MEMORY_END;
 	uint32_t external_small_start = external_small_end - RESERVED_EXTERNAL_SMALL_ALLOCATOR;
 	uint32_t external_end = external_small_start;
 	uint32_t external_start = external_small_start - RESERVED_EXTERNAL_ALLOCATOR;
 	uint32_t stealable_end = external_start;
 	// NOLINTBEGIN
-	// clang tidy hates both reinterpret and c style casts but linker output is only meaningful when taking address
 	auto stealable_start = (uint32_t)&__sdram_bss_end;
 
 	auto internal_small_start = (uint32_t)&__frunk_bss_end;
@@ -87,45 +79,22 @@ GeneralMemoryAllocator::GeneralMemoryAllocator()
 	regions[MEMORY_REGION_INTERNAL_SMALL].pivot_ = 64;
 }
 
-#ifdef USE_FREERTOS
-volatile uint32_t allocMutexContentionCount = 0;
-
 void GeneralMemoryAllocator::lockMutex() {
 	rtos_mutex_lock_recursive(allocMutex);
 }
 void GeneralMemoryAllocator::unlockMutex() {
 	rtos_mutex_unlock_recursive(allocMutex);
 }
-#endif
 
 constexpr size_t kInternalSwitchSize = 128;
 constexpr size_t kExternalSwitchSize = 128;
-int32_t closestDistance = 2147483647;
 
 void GeneralMemoryAllocator::checkStack(char const* caller) {
 #if ALPHA_OR_BETA_VERSION
-
-#ifdef USE_FREERTOS
 	/* Under FreeRTOS the task runs on its own stack, not the linker-defined
 	 * program stack.  FreeRTOS's own stack overflow detection
 	 * (configCHECK_FOR_STACK_OVERFLOW) handles this instead. */
 	(void)caller;
-#else
-	char a;
-
-	int32_t distance = (int32_t)&a - (uint32_t)&program_stack_start;
-	if (distance < closestDistance) {
-		closestDistance = distance;
-
-		D_PRINTLN("%d bytes in stack %d free bytes in stack at %s", (uint32_t)&program_stack_end - (int32_t)&a,
-		          distance, caller);
-		if (distance < 200) {
-			FREEZE_WITH_ERROR("E338");
-			D_PRINTLN("COLLISION");
-		}
-	}
-#endif
-
 #endif
 }
 
@@ -137,13 +106,10 @@ extern "C" void* delugeAlloc(unsigned int requiredSize, bool mayUseOnChipRam) {
 	return GeneralMemoryAllocator::get().alloc(requiredSize, mayUseOnChipRam, false, nullptr);
 }
 extern "C" void delugeDealloc(void* address) {
-#ifdef IN_UNIT_TESTS
-	free(address);
-#else
 	GeneralMemoryAllocator::get().dealloc(address);
-#endif
 }
-/* Unlocked helpers — caller must hold allocMutex and set lock=true */
+
+/* Unlocked helpers — caller must hold allocMutex */
 static void* allocExternalUnlocked(MemoryRegion* regions, uint32_t requiredSize) {
 	void* address = nullptr;
 	if (requiredSize < kExternalSwitchSize) {
@@ -166,34 +132,18 @@ static void* allocInternalUnlocked(MemoryRegion* regions, uint32_t requiredSize)
 	return address;
 }
 
-/* Public locked entry points.
- * Under FreeRTOS, a recursive mutex handles both cross-task serialization
- * and same-task re-entrancy. No pre-mutex lock check needed.
- * Under non-FreeRTOS, the boolean `lock` prevents re-entrancy. */
+/* Under FreeRTOS, a recursive mutex handles both cross-task serialization
+ * and same-task re-entrancy. No bool lock check needed. */
 void* GeneralMemoryAllocator::allocExternalDirect(uint32_t requiredSize) {
-#ifndef USE_FREERTOS
-	if (lock) {
-		return nullptr;
-	}
-#endif
 	lockMutex();
-	lock = true;
 	void* address = allocExternalUnlocked(regions, requiredSize);
-	lock = false;
 	unlockMutex();
 	return address;
 }
 
 void* GeneralMemoryAllocator::allocInternalDirect(uint32_t requiredSize) {
-#ifndef USE_FREERTOS
-	if (lock) {
-		return nullptr;
-	}
-#endif
 	lockMutex();
-	lock = true;
 	void* address = allocInternalUnlocked(regions, requiredSize);
-	lock = false;
 	unlockMutex();
 	return address;
 }
@@ -204,20 +154,10 @@ void GeneralMemoryAllocator::deallocExternalDirect(void* address) {
 	unlockMutex();
 }
 
-// Watch the heck out - in the older V3.1 branch, this had one less argument - makeStealable was missing - so in code
-// from there, thingNotToStealFrom could be interpreted as makeStealable! requiredSize 0 means get biggest allocation
-// available.
 void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam, bool makeStealable,
                                     void* thingNotToStealFrom) {
 
-#ifndef USE_FREERTOS
-	if (lock) {
-		return nullptr; // Prevent any weird loops in freeSomeStealableMemory()
-	}
-#endif
-
 	lockMutex();
-	lock = true;
 
 	void* address = nullptr;
 
@@ -228,7 +168,6 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 			address = allocInternalUnlocked(regions, requiredSize);
 
 			if (address != nullptr) {
-				lock = false;
 				unlockMutex();
 				return address;
 			}
@@ -240,7 +179,6 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 		address = allocExternalUnlocked(regions, requiredSize);
 
 		if (address) {
-			lock = false;
 			unlockMutex();
 			return address;
 		}
@@ -258,7 +196,6 @@ void* GeneralMemoryAllocator::alloc(uint32_t requiredSize, bool mayUseOnChipRam,
 #endif
 
 	address = regions[MEMORY_REGION_STEALABLE].alloc(requiredSize, makeStealable, thingNotToStealFrom);
-	lock = false;
 	unlockMutex();
 	return address;
 }
@@ -292,7 +229,6 @@ int32_t GeneralMemoryAllocator::getRegion(void* address) {
 	return 0;
 }
 
-// Returns new size
 uint32_t GeneralMemoryAllocator::shortenRight(void* address, uint32_t newSize) {
 	lockMutex();
 	uint32_t result = regions[getRegion(address)].shortenRight(address, newSize);
@@ -300,7 +236,6 @@ uint32_t GeneralMemoryAllocator::shortenRight(void* address, uint32_t newSize) {
 	return result;
 }
 
-// Returns how much it was shortened by
 uint32_t GeneralMemoryAllocator::shortenLeft(void* address, uint32_t amountToShorten,
                                              uint32_t numBytesToMoveRightIfSuccessful) {
 	lockMutex();
@@ -317,17 +252,9 @@ void GeneralMemoryAllocator::extend(void* address, uint32_t minAmountToExtend, u
 	*getAmountExtendedLeft = 0;
 	*getAmountExtendedRight = 0;
 
-#ifndef USE_FREERTOS
-	if (lock) {
-		return;
-	}
-#endif
-
 	lockMutex();
-	lock = true;
 	regions[getRegion(address)].extend(address, minAmountToExtend, idealAmountToExtend, getAmountExtendedLeft,
 	                                   getAmountExtendedRight, thingNotToStealFrom);
-	lock = false;
 	unlockMutex();
 }
 
@@ -358,4 +285,4 @@ void GeneralMemoryAllocator::putStealableInAppropriateQueue(Stealable* stealable
 	StealableQueue q = stealable->getAppropriateQueue();
 	putStealableInQueue(stealable, q);
 }
-#endif // !USE_FREERTOS
+#endif // USE_FREERTOS

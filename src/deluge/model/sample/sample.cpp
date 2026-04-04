@@ -21,7 +21,7 @@
 #include "dsp/fft/fft_config_manager.h"
 #include "dsp/timestretch/time_stretcher.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample_cache.h"
 #include "model/sample/sample_perc_cache_zone.h"
 #include "processing/engines/audio_engine.h"
@@ -221,8 +221,7 @@ SampleCache* Sample::getOrCreateCache(SampleHolder* sampleHolder, int32_t phaseI
 
 	int32_t numClusters = ((lengthInBytesCached - 1) >> Cluster::size_magnitude) + 1;
 
-	void* memory =
-	    GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SampleCache) + (numClusters - 1) * sizeof(Cluster*));
+	void* memory = allocExternal(sizeof(SampleCache) + (numClusters - 1) * sizeof(Cluster*));
 	if (memory == nullptr) {
 		return nullptr;
 	}
@@ -304,7 +303,7 @@ Error Sample::fillPercCache(TimeStretcher* timeStretcher, int32_t startPosSample
 			numPercCacheClusters = ((lengthInSamplesAfterReduction - 1) >> Cluster::size_magnitude)
 			                       + 1; // Stores this number for the future too
 			int32_t memorySize = numPercCacheClusters * sizeof(Cluster*);
-			percCacheClusters[reversed] = (Cluster**)GeneralMemoryAllocator::get().allocLowSpeed(memorySize);
+			percCacheClusters[reversed] = (Cluster**)allocExternal(memorySize);
 			if (!percCacheClusters[reversed]) {
 				LOCK_EXIT
 				return Error::INSUFFICIENT_RAM;
@@ -319,7 +318,7 @@ Error Sample::fillPercCache(TimeStretcher* timeStretcher, int32_t startPosSample
 		if (!percCacheMemory[reversed]) {
 			int32_t percCacheSize = lengthInSamplesAfterReduction;
 
-			percCacheMemory[reversed] = (uint8_t*)GeneralMemoryAllocator::get().allocLowSpeed(percCacheSize);
+			percCacheMemory[reversed] = (uint8_t*)allocExternal(percCacheSize);
 			if (!percCacheMemory[reversed]) {
 				LOCK_EXIT
 				return Error::INSUFFICIENT_RAM;
@@ -1284,8 +1283,7 @@ float Sample::determinePitch(bool doingSingleCycle, float minFreqHz, float maxFr
 	int32_t fftInputSize = kPitchDetectWindowSize * sizeof(int32_t);
 	int32_t fftOutputSize = ((kPitchDetectWindowSize >> 1) + 1) * sizeof(ne10_fft_cpx_int32_t);
 	int32_t floatIndexTableSize = (kPitchDetectWindowSize >> 2) * sizeof(float);
-	int32_t* fftInput =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(fftInputSize + fftOutputSize + floatIndexTableSize);
+	int32_t* fftInput = (int32_t*)allocExternal(fftInputSize + fftOutputSize + floatIndexTableSize);
 	if (!fftInput) {
 		return 0;
 	}

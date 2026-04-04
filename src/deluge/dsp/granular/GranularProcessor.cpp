@@ -19,7 +19,7 @@
 #include "OSLikeStuff/timers_interrupts/timers_interrupts.h"
 #include "definitions_cxx.hpp"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/fx/stutterer.h"
 #include "model/mod_controllable/mod_controllable.h"
 #include "modulation/lfo.h"
@@ -304,7 +304,7 @@ GranularProcessor::GranularProcessor() {
 }
 void GranularProcessor::getBuffer() {
 	if (grainBuffer == nullptr) {
-		void* grainBufferMemory = GeneralMemoryAllocator::get().allocStealable(sizeof(GrainBuffer));
+		void* grainBufferMemory = allocStealable(sizeof(GrainBuffer));
 		if (grainBufferMemory) {
 			grainBuffer = new (grainBufferMemory) GrainBuffer(this);
 		}

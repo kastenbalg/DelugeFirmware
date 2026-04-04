@@ -25,7 +25,7 @@
 #include "dsp/util.hpp"
 #include "gui/waveform/waveform_renderer.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/instrument_clip.h"
 #include "model/model_stack.h"
 #include "model/sample/sample.h"
@@ -112,7 +112,7 @@ bool Voice::noteOn(ModelStackWithSoundFlags* modelStack, int32_t newNoteCodeBefo
                    int32_t ticksLate, uint32_t samplesLate, bool resetEnvelopes, int32_t newFromMIDIChannel,
                    const int16_t* mpeValues) {
 
-	GeneralMemoryAllocator::get().checkStack("Voice::noteOn");
+	checkStack("Voice::noteOn");
 
 	inputCharacteristics[util::to_underlying(MIDICharacteristic::NOTE)] = newNoteCodeBeforeArpeggiation;
 	inputCharacteristics[util::to_underlying(MIDICharacteristic::CHANNEL)] = newFromMIDIChannel;
@@ -711,7 +711,7 @@ uint32_t Voice::getLocalLFOPhaseIncrement(LFO_ID lfoId, deluge::modulation::para
 [[gnu::hot]] bool Voice::render(ModelStackWithSoundFlags* modelStack, int32_t* soundBuffer, int32_t numSamples,
                                 bool soundRenderingInStereo, bool applyingPanAtVoiceLevel, uint32_t sourcesChanged,
                                 bool doLPF, bool doHPF, int32_t externalPitchAdjust) {
-	GeneralMemoryAllocator::get().checkStack("Voice::render");
+	checkStack("Voice::render");
 
 	ParamManagerForTimeline* paramManager = (ParamManagerForTimeline*)modelStack->paramManager;
 	Sound& sound = *static_cast<Sound*>(modelStack->modControllable);
@@ -1940,7 +1940,7 @@ void Voice::renderBasicSource(Sound& sound, ParamManagerForTimeline* paramManage
                               uint32_t* __restrict__ getPhaseIncrements, bool getOutAfterPhaseIncrements,
                               int32_t waveIndexIncrement) {
 
-	GeneralMemoryAllocator::get().checkStack("Voice::renderBasicSource");
+	checkStack("Voice::renderBasicSource");
 
 	// For each unison part
 	for (int32_t u = 0; u < sound.numUnison; u++) {
@@ -2241,7 +2241,7 @@ dontUseCache: {}
 
 					if (liveInputBuffer) {
 
-						void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(LivePitchShifter));
+						void* memory = allocInternal(sizeof(LivePitchShifter));
 
 						if (memory) {
 							source->livePitchShifter = new (memory) LivePitchShifter(inputTypeNow, phaseIncrement);

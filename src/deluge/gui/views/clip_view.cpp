@@ -23,7 +23,7 @@
 #include "gui/views/view.h"
 #include "hid/buttons.h"
 #include "hid/display/display.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/clip.h"
 #include "model/consequence/consequence_clip_horizontal_shift.h"
@@ -237,7 +237,7 @@ ActionResult ClipView::horizontalEncoderAction(int32_t offset) {
 			action = actionLogger.getNewAction(ActionType::CLIP_HORIZONTAL_SHIFT, ActionAddition::NOT_ALLOWED);
 			if (action) {
 addConsequenceToAction:
-				void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipHorizontalShift));
+				void* consMemory = allocExternal(sizeof(ConsequenceClipHorizontalShift));
 
 				if (consMemory) {
 					ConsequenceClipHorizontalShift* newConsequence = new (consMemory)

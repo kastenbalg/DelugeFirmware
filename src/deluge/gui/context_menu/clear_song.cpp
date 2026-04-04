@@ -20,7 +20,7 @@
 #include "gui/views/view.h"
 #include "hid/display/display.h"
 #include "hid/led/indicator_leds.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/song/song.h"
 #include "modulation/params/param_manager.h"
@@ -86,7 +86,7 @@ bool ClearSong::acceptCurrentOption() {
 		AudioEngine::songSwapAboutToHappen();
 	}
 
-	void* songMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Song)); // TODO: error checking
+	void* songMemory = allocExternal(sizeof(Song)); // TODO: error checking
 	preLoadedSong = new (songMemory) Song();
 	preLoadedSong->paramManager.setupUnpatched(); // TODO: error checking
 	GlobalEffectable::initParams(&preLoadedSong->paramManager);

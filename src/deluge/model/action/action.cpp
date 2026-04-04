@@ -18,7 +18,7 @@
 #include "model/action/action.h"
 #include "definitions_cxx.hpp"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_clip_state.h"
 #include "model/action/action_logger.h"
 #include "model/clip/instrument_clip.h"
@@ -178,7 +178,7 @@ void Action::recordParamChangeIfNotAlreadySnapshotted(ModelStackWithAutoParam co
 
 void Action::recordParamChangeDefinitely(ModelStackWithAutoParam const* modelStack, bool stealData) {
 
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceParamChange));
+	void* consMemory = allocExternal(sizeof(ConsequenceParamChange));
 
 	if (consMemory) {
 		ConsequenceParamChange* newCons = new (consMemory) ConsequenceParamChange(modelStack, stealData);
@@ -219,7 +219,7 @@ Error Action::recordNoteArrayChangeIfNotAlreadySnapshotted(InstrumentClip* clip,
 
 Error Action::recordNoteArrayChangeDefinitely(InstrumentClip* clip, int32_t noteRowId, NoteVector* noteVector,
                                               bool stealData) {
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceNoteArrayChange));
+	void* consMemory = allocExternal(sizeof(ConsequenceNoteArrayChange));
 
 	if (!consMemory) {
 		return Error::INSUFFICIENT_RAM;
@@ -239,7 +239,7 @@ void Action::recordNoteExistenceChange(InstrumentClip* clip, int32_t noteRowId, 
 		return;
 	}
 
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceNoteExistence));
+	void* consMemory = allocExternal(sizeof(ConsequenceNoteExistence));
 
 	if (consMemory) {
 		ConsequenceNoteExistence* newConsequence =
@@ -250,7 +250,7 @@ void Action::recordNoteExistenceChange(InstrumentClip* clip, int32_t noteRowId, 
 
 void Action::recordClipInstanceExistenceChange(Output* output, ClipInstance* clipInstance, ExistenceChangeType type) {
 
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipInstanceExistence));
+	void* consMemory = allocExternal(sizeof(ConsequenceClipInstanceExistence));
 
 	if (consMemory) {
 		ConsequenceClipInstanceExistence* newConsequence =
@@ -271,7 +271,7 @@ void Action::recordClipLengthChange(Clip* clip, int32_t oldLength) {
 		}
 	}
 
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipLength));
+	void* consMemory = allocExternal(sizeof(ConsequenceClipLength));
 
 	if (consMemory) {
 		ConsequenceClipLength* consequenceClipLength = new (consMemory) ConsequenceClipLength(clip, oldLength);
@@ -280,7 +280,7 @@ void Action::recordClipLengthChange(Clip* clip, int32_t oldLength) {
 }
 
 bool Action::recordClipExistenceChange(Song* song, ClipArray* clipArray, Clip* clip, ExistenceChangeType type) {
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipExistence));
+	void* consMemory = allocExternal(sizeof(ConsequenceClipExistence));
 	if (!consMemory) {
 		return false;
 	}
@@ -303,7 +303,7 @@ bool Action::recordClipExistenceChange(Song* song, ClipArray* clipArray, Clip* c
 
 // Call this *before* you change the Sample or its filePath
 void Action::recordAudioClipSampleChange(AudioClip* clip) {
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceAudioClipSetSample));
+	void* consMemory = allocExternal(sizeof(ConsequenceAudioClipSetSample));
 	if (consMemory) {
 		ConsequenceAudioClipSetSample* cons = new (consMemory) ConsequenceAudioClipSetSample(clip);
 		addConsequence(cons);

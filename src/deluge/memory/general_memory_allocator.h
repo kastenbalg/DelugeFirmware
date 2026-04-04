@@ -65,11 +65,11 @@ class Stealable;
 class GeneralMemoryAllocator {
 public:
 	GeneralMemoryAllocator();
-	[[gnu::always_inline]] void* allocMaxSpeed(uint32_t requiredSize, void* thingNotToStealFrom = nullptr) {
+	[[gnu::always_inline]] void* allocInternal(uint32_t requiredSize, void* thingNotToStealFrom = nullptr) {
 		return alloc(requiredSize, true, false, thingNotToStealFrom);
 	}
 
-	[[gnu::always_inline]] void* allocLowSpeed(uint32_t requiredSize, void* thingNotToStealFrom = nullptr) {
+	[[gnu::always_inline]] void* allocExternal(uint32_t requiredSize, void* thingNotToStealFrom = nullptr) {
 		return alloc(requiredSize, false, false, thingNotToStealFrom);
 	}
 
@@ -79,9 +79,9 @@ public:
 
 	void* alloc(uint32_t requiredSize, bool mayUseOnChipRam, bool makeStealable, void* thingNotToStealFrom);
 	void dealloc(void* address);
-	void* allocExternal(uint32_t requiredSize);
-	void* allocInternal(uint32_t requiredSize);
-	void deallocExternal(void* address);
+	void* allocExternalDirect(uint32_t requiredSize);
+	void* allocInternalDirect(uint32_t requiredSize);
+	void deallocExternalDirect(void* address);
 	uint32_t shortenRight(void* address, uint32_t newSize);
 	uint32_t shortenLeft(void* address, uint32_t amountToShorten, uint32_t numBytesToMoveRightIfSuccessful = 0);
 	void extend(void* address, uint32_t minAmountToExtend, uint32_t idealAmountToExtend,
@@ -121,6 +121,6 @@ private:
 };
 
 extern "C" {
-void* delugeAlloc(unsigned int requiredSize, bool mayUseOnChipRam = true);
+void* delugeAlloc(unsigned int requiredSize, bool mayUseOnChipRam);
 void delugeDealloc(void* address);
 }

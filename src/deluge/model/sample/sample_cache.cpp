@@ -165,7 +165,7 @@ bool SampleCache::setupNewCluster(int32_t clusterIndex) {
 
 void SampleCache::prioritizeNotStealingCluster(int32_t clusterIndex) {
 
-	if (GeneralMemoryAllocator::get().getRegion(clusters[clusterIndex]) != MEMORY_REGION_STEALABLE) {
+	if (getMemoryRegion(clusters[clusterIndex]) != MEMORY_REGION_STEALABLE) {
 		// clusters not in external
 		FREEZE_WITH_ERROR("C002");
 		return; // Sorta just have to do this
@@ -196,7 +196,7 @@ void SampleCache::prioritizeNotStealingCluster(int32_t clusterIndex) {
 	// Later Clusters
 	else {
 
-		if (GeneralMemoryAllocator::get().getRegion(clusters[clusterIndex - 1]) != MEMORY_REGION_STEALABLE) {
+		if (getMemoryRegion(clusters[clusterIndex - 1]) != MEMORY_REGION_STEALABLE) {
 			// clusters not in external
 			FREEZE_WITH_ERROR("C001");
 			return; // Sorta just have to do this

@@ -37,7 +37,7 @@
 #include "hid/led/indicator_leds.h"
 #include "io/midi/midi_engine.h"
 #include "io/midi/midi_transpose.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"

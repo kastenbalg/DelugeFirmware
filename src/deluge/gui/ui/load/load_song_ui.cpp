@@ -35,7 +35,7 @@
 #include "hid/encoders.h"
 #include "hid/led/indicator_leds.h"
 #include "hid/led/pad_leds.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/instrument/midi_instrument.h"
 #include "model/settings/runtime_feature_settings.h"
@@ -376,7 +376,7 @@ void LoadSongUI::performLoad() {
 	}
 
 	terminate_set_context("TLD6"); /* Terminate during song load - alloc Song */
-	void* songMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Song));
+	void* songMemory = allocExternal(sizeof(Song));
 	terminate_set_context("TD6A"); /* alloc returned */
 	if (!songMemory) {
 		/* Diagnostic: display sizeof(Song) on 7-seg so we can see it.

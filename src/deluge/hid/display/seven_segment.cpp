@@ -28,7 +28,7 @@
 #include "hid/led/indicator_leds.h"
 #include "io/debug/log.h"
 #include "io/midi/sysex.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "util/cfunctions.h"
 #include "util/functions.h"
@@ -176,7 +176,7 @@ void SevenSegment::innerSetText(std::string_view newText, bool alignRight, std::
                                 bool doBlink, uint8_t* newBlinkMask, bool blinkImmediately, bool shouldBlinkFast,
                                 int32_t scrollPos, uint8_t* encodedAddition, bool justReplaceBottomLayer) {
 	// Paul: Render time could be lower putting this into internal
-	void* layerSpace = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(NumericLayerBasicText));
+	void* layerSpace = allocExternal(sizeof(NumericLayerBasicText));
 	if (!layerSpace) {
 		return;
 	}
@@ -225,7 +225,7 @@ void SevenSegment::innerSetText(std::string_view newText, bool alignRight, std::
 NumericLayerScrollingText* SevenSegment::setScrollingText(char const* newText, int32_t startAtTextPos,
                                                           int32_t initialDelay, int count, uint8_t fixedDot) {
 	// Paul: Render time could be lower putting this into internal
-	void* layerSpace = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(NumericLayerScrollingText));
+	void* layerSpace = allocExternal(sizeof(NumericLayerScrollingText));
 	if (!layerSpace) {
 		return nullptr;
 	}
@@ -280,7 +280,7 @@ void SevenSegment::transitionToNewLayer(NumericLayer* newLayer) {
 	if (!popupActive && nextTransitionDirection != 0 && topLayer != nullptr) {
 
 		// Paul: Render time could be lower putting this into internal
-		void* layerSpace = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(NumericLayerScrollTransition));
+		void* layerSpace = allocExternal(sizeof(NumericLayerScrollTransition));
 
 		if (layerSpace) {
 			scrollTransition = new (layerSpace) NumericLayerScrollTransition();
@@ -676,7 +676,7 @@ void SevenSegment::render() {
 // Call this to make the loading animation happen
 void SevenSegment::displayLoadingAnimation(bool delayed, bool transparent) {
 	// Paul: Render time could be lower putting this into internal
-	void* layerSpace = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(NumericLayerLoadingAnimation));
+	void* layerSpace = allocExternal(sizeof(NumericLayerLoadingAnimation));
 	if (!layerSpace) {
 		return;
 	}

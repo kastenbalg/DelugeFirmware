@@ -22,7 +22,7 @@
 #include "gui/ui/browser/sample_browser.h"
 #include "gui/ui/root_ui.h"
 #include "gui/ui_timer_manager.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/audio_clip.h"
 #include "model/sample/sample.h"
 #include "model/song/song.h"
@@ -118,7 +118,7 @@ Error SampleRecorder::setup(int32_t newNumChannels, AudioInputChannel newMode, b
 	folderID = newFolderID;
 
 	// Didn't seem to make a difference forcing this into local RAM
-	void* sample_memory = GeneralMemoryAllocator::get().allocStealable(sizeof(Sample));
+	void* sample_memory = allocStealable(sizeof(Sample));
 	if (sample_memory == nullptr) {
 		return Error::INSUFFICIENT_RAM;
 	}

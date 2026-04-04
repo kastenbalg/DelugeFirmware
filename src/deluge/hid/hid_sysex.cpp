@@ -7,7 +7,7 @@
 #include "io/midi/midi_device.h"
 #include "io/midi/midi_engine.h"
 #include "io/midi/sysex.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "processing/engines/audio_engine.h"
 #include "util/pack.h"
 #include <cstring>
@@ -59,8 +59,8 @@ void HIDSysex::requestOLEDDisplay(MIDICable& cable, uint8_t* data, int32_t len) 
 			}
 
 			if (oledDeltaImage == nullptr) {
-				oledDeltaImage = (uint8_t*)GeneralMemoryAllocator::get().allocLowSpeed(
-				    sizeof(uint8_t[OLED_MAIN_HEIGHT_PIXELS >> 3][OLED_MAIN_WIDTH_PIXELS]));
+				oledDeltaImage =
+				    (uint8_t*)allocExternal(sizeof(uint8_t[OLED_MAIN_HEIGHT_PIXELS >> 3][OLED_MAIN_WIDTH_PIXELS]));
 			}
 		}
 		sendDisplayIfChanged();

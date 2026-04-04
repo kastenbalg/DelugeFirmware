@@ -27,7 +27,7 @@
 #include "hid/buttons.h"
 #include "io/midi/midi_device.h"
 #include "io/midi/midi_engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/clip_instance.h"
 #include "model/consequence/consequence_note_row_mute.h"
@@ -150,7 +150,7 @@ void InstrumentClip::copyBasicsFrom(Clip const* otherClip) {
 // Will replace the Clip in the modelStack, if success.
 Error InstrumentClip::clone(ModelStackWithTimelineCounter* modelStack, bool shouldFlattenReversing) const {
 
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(sizeof(InstrumentClip));
 	if (!clipMemory) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -939,7 +939,7 @@ void InstrumentClip::toggleNoteRowMute(ModelStackWithNoteRow* modelStack) {
 	// Record action
 	Action* action = actionLogger.getNewAction(ActionType::MISC);
 	if (action) {
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceNoteRowMute));
+		void* consMemory = allocExternal(sizeof(ConsequenceNoteRowMute));
 
 		if (consMemory) {
 			ConsequenceNoteRowMute* newConsequence =
@@ -1107,7 +1107,7 @@ ModelStackWithNoteRow* InstrumentClip::getOrCreateNoteRowForYNote(int32_t yNote,
 				thisNoteRow->notes.empty(); // Undo our "total hack", above
 
 				if (action) {
-					void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceScaleAddNote));
+					void* consMemory = allocExternal(sizeof(ConsequenceScaleAddNote));
 
 					if (consMemory) {
 						ConsequenceScaleAddNote* newConsequence =
@@ -2695,7 +2695,7 @@ someError:
 		else if (!strcmp(tagName, "sound") || !strcmp(tagName, "synth")) {
 			if (!output) {
 				{
-					void* instrumentMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(SoundInstrument));
+					void* instrumentMemory = allocExternal(sizeof(SoundInstrument));
 					if (!instrumentMemory) {
 						goto ramError;
 					}
@@ -2731,7 +2731,7 @@ loadInstrument:
 		// For song files from before V2.0, where Instruments were stored within the Clip
 		else if (!strcmp(tagName, "kit")) {
 			if (!output) {
-				void* instrumentMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Kit));
+				void* instrumentMemory = allocExternal(sizeof(Kit));
 				if (!instrumentMemory) {
 					goto ramError;
 				}
@@ -3914,7 +3914,7 @@ Error InstrumentClip::claimOutput(ModelStackWithTimelineCounter* modelStack) {
 				thisNoteRow->drum = kit->getGateDrumForChannel(gateChannel);
 
 				if (!thisNoteRow->drum) {
-					void* drumMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(GateDrum));
+					void* drumMemory = allocExternal(sizeof(GateDrum));
 					if (!drumMemory) {
 						return Error::INSUFFICIENT_RAM;
 					}
@@ -4236,7 +4236,7 @@ void InstrumentClip::finishLinearRecording(ModelStackWithTimelineCounter* modelS
 Clip* InstrumentClip::cloneAsNewOverdub(ModelStackWithTimelineCounter* modelStack, OverDubType newOverdubNature) {
 
 	// Allocate memory for Clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(sizeof(InstrumentClip));
 	if (!clipMemory) {
 ramError:
 		display->displayError(Error::INSUFFICIENT_RAM);

@@ -19,7 +19,7 @@
 #include "definitions_cxx.hpp"
 #include "hid/display/display.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "util/functions.h"
 #include <string.h>
 
@@ -95,7 +95,7 @@ void* OpenAddressingHashTable::insert(uint32_t key, bool* onlyIfNotAlreadyPresen
 	// If no memory, get some
 	if (!memory) {
 		int32_t newNumBuckets = initialNumBuckets;
-		memory = GeneralMemoryAllocator::get().allocMaxSpeed(newNumBuckets * elementSize);
+		memory = allocInternal(newNumBuckets * elementSize);
 		if (!memory) {
 			return nullptr;
 		}
@@ -110,7 +110,7 @@ void* OpenAddressingHashTable::insert(uint32_t key, bool* onlyIfNotAlreadyPresen
 	else if (numElements >= numBuckets - (numBuckets >> 2)) {
 		int32_t newNumBuckets = numBuckets << 1;
 
-		secondaryMemory = GeneralMemoryAllocator::get().allocMaxSpeed(newNumBuckets * elementSize);
+		secondaryMemory = allocInternal(newNumBuckets * elementSize);
 		if (secondaryMemory) {
 
 			// Initialize

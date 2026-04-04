@@ -8,7 +8,7 @@ extern "C" void freezeWithError(const char* errmsg);
 #if !IN_UNIT_TESTS
 void* operator new(std::size_t n) noexcept(false) {
 	// allocate on external RAM
-	void* p = GeneralMemoryAllocator::get().allocExternal(n);
+	void* p = GeneralMemoryAllocator::get().allocExternalDirect(n);
 #ifdef USE_FREERTOS
 	if (!p) {
 		/* Returning nullptr from throwing operator new is undefined behavior

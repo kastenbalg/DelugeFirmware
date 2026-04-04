@@ -19,7 +19,7 @@
 
 #include "definitions.h"
 #include "definitions_cxx.hpp"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "memory/stealable.h"
 #include <array>
 #include <cstdint>

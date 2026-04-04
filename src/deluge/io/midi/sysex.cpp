@@ -92,7 +92,7 @@ void Debug::sysexDebugPrint(MIDICable& cable, const char* msg, bool nl) {
 #include "gui/l10n/l10n.h"
 #include "hid/display/oled.h"
 #include "hid/led/pad_leds.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/settings/runtime_feature_settings.h"
 
 static uint8_t* load_buf;
@@ -112,7 +112,7 @@ static void firstPacket(uint8_t* data, int32_t len) {
 		}
 		load_bufsize = load_codesize + (511 - ((load_codesize - 1) & 511));
 
-		load_buf = (uint8_t*)GeneralMemoryAllocator::get().allocLowSpeed(load_bufsize);
+		load_buf = (uint8_t*)allocExternal(load_bufsize);
 		if (load_buf == nullptr) {
 			// fail :(
 			return;

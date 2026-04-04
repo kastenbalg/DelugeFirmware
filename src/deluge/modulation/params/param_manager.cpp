@@ -18,7 +18,7 @@
 #include "modulation/params/param_manager.h"
 #include "definitions_cxx.hpp"
 #include "gui/views/view.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/instrument_clip.h"
 #include "model/model_stack.h"
 #include "model/song/song.h"
@@ -58,7 +58,7 @@ ParamManagerForTimeline* ParamManagerForTimeline::toForTimeline() {
 #endif
 
 Error ParamManager::setupMIDI() {
-	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDIParamCollection));
+	void* memory = allocExternal(sizeof(MIDIParamCollection));
 	if (!memory) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -71,7 +71,7 @@ Error ParamManager::setupMIDI() {
 }
 
 Error ParamManager::setupUnpatched() {
-	void* memoryUnpatched = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(UnpatchedParamSet));
+	void* memoryUnpatched = allocExternal(sizeof(UnpatchedParamSet));
 	if (!memoryUnpatched) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -83,19 +83,19 @@ Error ParamManager::setupUnpatched() {
 }
 
 Error ParamManager::setupWithPatching() {
-	void* memoryUnpatched = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(UnpatchedParamSet));
+	void* memoryUnpatched = allocExternal(sizeof(UnpatchedParamSet));
 	if (!memoryUnpatched) {
 		return Error::INSUFFICIENT_RAM;
 	}
 
-	void* memoryPatched = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(PatchedParamSet));
+	void* memoryPatched = allocExternal(sizeof(PatchedParamSet));
 	if (!memoryPatched) {
 ramError2:
 		delugeDealloc(memoryUnpatched);
 		return Error::INSUFFICIENT_RAM;
 	}
 
-	void* memoryPatchCables = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(PatchCableSet));
+	void* memoryPatchCables = allocExternal(sizeof(PatchCableSet));
 	if (!memoryPatchCables) {
 		delugeDealloc(memoryPatched);
 		goto ramError2;
@@ -189,8 +189,7 @@ Error ParamManager::cloneParamCollectionsFrom(ParamManager const* other, bool co
 
 	while (otherSummary != otherStopAt) {
 		// To cut corners, we store this currently blank/undefined memory in our array of type ParamCollectionSummary
-		newSummary->paramCollection =
-		    (ParamCollection*)GeneralMemoryAllocator::get().allocLowSpeed(otherSummary->paramCollection->objectSize);
+		newSummary->paramCollection = (ParamCollection*)allocExternal(otherSummary->paramCollection->objectSize);
 
 		// If that failed, deallocate all the previous memories
 		if (!newSummary->paramCollection) {
@@ -290,7 +289,7 @@ bool ParamManager::ensureExpressionParamSetExists(bool forDrum) {
 	int32_t offset = getExpressionParamSetOffset();
 	if (!summaries[offset].paramCollection) {
 
-		void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ExpressionParamSet));
+		void* memory = allocExternal(sizeof(ExpressionParamSet));
 		if (!memory) {
 			return false;
 		}

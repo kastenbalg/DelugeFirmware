@@ -21,7 +21,7 @@
 #include "gui/views/session_view.h"
 #include "gui/views/view.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_instance.h"
@@ -408,7 +408,7 @@ bool Clip::opportunityToBeginSessionLinearRecording(ModelStackWithTimelineCounte
 				                                  ExistenceChangeType::CREATE);
 
 				if (*newOutputCreated) {
-					void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceOutputExistence));
+					void* consMemory = allocExternal(sizeof(ConsequenceOutputExistence));
 					if (consMemory != nullptr) {
 						auto* cons = new (consMemory) ConsequenceOutputExistence(output, ExistenceChangeType::CREATE);
 						action->addConsequence(cons);
@@ -418,8 +418,7 @@ bool Clip::opportunityToBeginSessionLinearRecording(ModelStackWithTimelineCounte
 		}
 		else {
 			if (action != nullptr) {
-				void* consMemory =
-				    GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceClipBeginLinearRecord));
+				void* consMemory = allocExternal(sizeof(ConsequenceClipBeginLinearRecord));
 				if (consMemory != nullptr) {
 					auto* cons = new (consMemory) ConsequenceClipBeginLinearRecord(this);
 					action->addConsequence(cons);

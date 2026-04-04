@@ -22,7 +22,7 @@
 #include "gui/views/automation_view.h"
 #include "gui/waveform/waveform_renderer.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/clip_instance.h"
 #include "model/consequence/consequence_output_existence.h"
@@ -78,7 +78,7 @@ AudioClip::~AudioClip() {
 // Will replace the Clip in the modelStack, if success.
 Error AudioClip::clone(ModelStackWithTimelineCounter* modelStack, bool shouldFlattenReversing) const {
 
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* clipMemory = allocExternal(sizeof(AudioClip));
 	if (!clipMemory) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -248,7 +248,7 @@ void AudioClip::finishLinearRecording(ModelStackWithTimelineCounter* modelStack,
 
 Clip* AudioClip::cloneAsNewOverdub(ModelStackWithTimelineCounter* modelStackOldClip, OverDubType newOverdubNature) {
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* clipMemory = allocExternal(sizeof(AudioClip));
 	if (!clipMemory) {
 ramError:
 		display->displayError(Error::INSUFFICIENT_RAM);

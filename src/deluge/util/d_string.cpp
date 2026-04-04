@@ -18,6 +18,7 @@
 #include "util/d_string.h"
 #include "definitions_cxx.hpp"
 #include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "util/cfunctions.h"
 #include <bit>
 #include <cstring>
@@ -86,7 +87,7 @@ Error String::set(char const* newChars, int32_t newLength) {
 
 			// If we're here, the memory is exclusively ours (1 reason)
 
-			int32_t allocatedSize = GeneralMemoryAllocator::get().getAllocatedSize(stringMemory - 4);
+			int32_t allocatedSize = getAllocatedSize(stringMemory - 4);
 
 			int32_t extraMemoryNeeded = newLength + 1 + 4 - allocatedSize;
 
@@ -98,8 +99,8 @@ Error String::set(char const* newChars, int32_t newLength) {
 			else {
 				// Try extending
 				uint32_t amountExtendedLeft, amountExtendedRight;
-				GeneralMemoryAllocator::get().extend(stringMemory - 4, extraMemoryNeeded, extraMemoryNeeded,
-				                                     &amountExtendedLeft, &amountExtendedRight);
+				memoryExtend(stringMemory - 4, extraMemoryNeeded, extraMemoryNeeded, &amountExtendedLeft,
+				             &amountExtendedRight);
 
 				stringMemory -= amountExtendedLeft;
 
@@ -116,7 +117,7 @@ clearAndAllocateNew:
 	}
 
 	{
-		void* newMemory = GeneralMemoryAllocator::get().allocExternal(newLength + 1 + 4);
+		void* newMemory = allocExternalDirect(newLength + 1 + 4);
 		if (!newMemory) {
 			return Error::INSUFFICIENT_RAM;
 		}
@@ -145,7 +146,7 @@ void String::set(String const* otherString) {
 			return;
 		}
 		// or if it doesn't have an allocation
-		if (!GeneralMemoryAllocator::get().getAllocatedSize(sm)) {
+		if (!getAllocatedSize(sm)) {
 			FREEZE_WITH_ERROR("S002");
 			return;
 		}
@@ -180,7 +181,7 @@ Error String::shorten(int32_t newLength) {
 
 		// If reasons, we have to do a clone
 		if (oldNumReasons > 1) {
-			void* newMemory = GeneralMemoryAllocator::get().allocExternal(newLength + 1 + 4);
+			void* newMemory = allocExternalDirect(newLength + 1 + 4);
 			if (!newMemory) {
 				return Error::INSUFFICIENT_RAM;
 			}
@@ -246,15 +247,14 @@ Error String::concatenateAtPos(char const* newChars, int32_t pos, int32_t newCha
 		goto allocateNewMemory;
 	}
 
-	extraBytesNeeded = requiredSize - GeneralMemoryAllocator::get().getAllocatedSize(stringMemory - 4);
+	extraBytesNeeded = requiredSize - getAllocatedSize(stringMemory - 4);
 
 	// If not enough memory allocated...
 	if (extraBytesNeeded > 0) {
 
 		// See if we can extend
 		uint32_t amountExtendedLeft, amountExtendedRight;
-		GeneralMemoryAllocator::get().extend(stringMemory - 4, extraBytesNeeded, extraBytesNeeded, &amountExtendedLeft,
-		                                     &amountExtendedRight);
+		memoryExtend(stringMemory - 4, extraBytesNeeded, extraBytesNeeded, &amountExtendedLeft, &amountExtendedRight);
 
 		// If that worked...
 		if (amountExtendedLeft || amountExtendedRight) {
@@ -270,7 +270,7 @@ Error String::concatenateAtPos(char const* newChars, int32_t pos, int32_t newCha
 		// Otherwise, gotta allocate brand new memory
 		else {
 allocateNewMemory:
-			void* newMemory = GeneralMemoryAllocator::get().allocExternal(requiredSize);
+			void* newMemory = allocExternalDirect(requiredSize);
 			if (!newMemory) {
 				return Error::INSUFFICIENT_RAM;
 			}
@@ -314,7 +314,7 @@ Error String::setChar(char newChar, int32_t pos) {
 		int32_t length = getLength();
 
 		int32_t requiredSize = length + 4 + 1;
-		void* newMemory = GeneralMemoryAllocator::get().allocExternal(requiredSize);
+		void* newMemory = allocExternalDirect(requiredSize);
 		if (!newMemory) {
 			return Error::INSUFFICIENT_RAM;
 		}

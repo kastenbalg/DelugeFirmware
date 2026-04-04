@@ -23,7 +23,7 @@
 #include "hid/display/display.h"
 #include "io/debug/log.h"
 #include "io/midi/midi_device_manager.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample.h"
 #include "model/sample/sample_cache.h"
 #include "model/sample/sample_reader.h"
@@ -554,7 +554,7 @@ notLoadableAsWaveTable:
 				}
 			}
 
-			void* waveTableMemory = GeneralMemoryAllocator::get().allocStealable(sizeof(WaveTable));
+			void* waveTableMemory = allocStealable(sizeof(WaveTable));
 			if (!waveTableMemory) {
 				*error = Error::INSUFFICIENT_RAM;
 				return NULL;
@@ -790,7 +790,7 @@ cantLoadFile:
 
 	int32_t memorySizeNeeded = (type == AudioFileType::SAMPLE) ? sizeof(Sample) : sizeof(WaveTable);
 
-	void* audioFileMemory = GeneralMemoryAllocator::get().allocStealable(memorySizeNeeded);
+	void* audioFileMemory = allocStealable(memorySizeNeeded);
 	if (!audioFileMemory) {
 ramError:
 		*error = Error::INSUFFICIENT_RAM;
@@ -1487,7 +1487,7 @@ void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* err
 		delete &cluster;
 		break;
 	case Action::fileAway:
-		GeneralMemoryAllocator::get().putStealableInAppropriateQueue(&cluster);
+		putStealableInAppropriateQueue(&cluster);
 		break;
 	case Action::negativeError:
 #if ALPHA_OR_BETA_VERSION

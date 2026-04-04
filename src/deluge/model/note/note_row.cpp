@@ -22,7 +22,7 @@
 #include "gui/views/view.h"
 #include "io/debug/log.h"
 #include "io/midi/midi_device.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action.h"
 #include "model/clip/instrument_clip.h"
 #include "model/consequence/consequence_note_existence.h"
@@ -546,8 +546,7 @@ Error NoteRow::addCorrespondingNotes(int32_t targetPos, int32_t newNotesLength, 
 
 	// Allocate all the working memory we're going to need for this operation - that's arrays for searchPos and
 	// resultingIndexes
-	int32_t* __restrict__ searchTerms =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(numScreensToAddNoteOn * sizeof(int32_t));
+	int32_t* __restrict__ searchTerms = (int32_t*)allocExternal(numScreensToAddNoteOn * sizeof(int32_t));
 	if (!searchTerms) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -860,8 +859,7 @@ Error NoteRow::clearArea(int32_t areaStart, int32_t areaWidth, ModelStackWithNot
 
 	// Allocate all the working memory we're going to need for this operation - that's arrays for searchPos and
 	// resultingIndexes
-	int32_t* __restrict__ searchTerms =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(numScreens * 2 * sizeof(int32_t));
+	int32_t* __restrict__ searchTerms = (int32_t*)allocExternal(numScreens * 2 * sizeof(int32_t));
 	if (!searchTerms) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -1164,8 +1162,7 @@ Error NoteRow::editNoteRepeatAcrossAllScreens(int32_t editPos, int32_t squareWid
 
 	// Allocate all the working memory we're going to need for this operation - that's arrays for searchPos and
 	// resultingIndexes
-	int32_t* __restrict__ searchTerms =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(numScreens * 2 * sizeof(int32_t));
+	int32_t* __restrict__ searchTerms = (int32_t*)allocExternal(numScreens * 2 * sizeof(int32_t));
 	if (!searchTerms) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -1364,8 +1361,7 @@ Error NoteRow::nudgeNotesAcrossAllScreens(int32_t editPos, ModelStackWithNoteRow
 
 	// Allocate all the working memory we're going to need for this operation - that's arrays for searchPos and
 	// resultingIndexes
-	int32_t* __restrict__ searchTerms =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(numScreens * 2 * sizeof(int32_t));
+	int32_t* __restrict__ searchTerms = (int32_t*)allocExternal(numScreens * 2 * sizeof(int32_t));
 	if (!searchTerms) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -1769,8 +1765,7 @@ Error NoteRow::changeNotesAcrossAllScreens(int32_t editPos, ModelStackWithNoteRo
 
 	// Allocate all the working memory we're going to need for this operation - that's arrays for searchPos and
 	// resultingIndexes
-	int32_t* __restrict__ searchTerms =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(numScreens * sizeof(int32_t));
+	int32_t* __restrict__ searchTerms = (int32_t*)allocExternal(numScreens * sizeof(int32_t));
 	if (!searchTerms) {
 		return Error::INSUFFICIENT_RAM;
 	}
@@ -3876,7 +3871,7 @@ void NoteRow::rememberDrumName() {
 
 		// If we're here, we're at the end of the list, didn't find an instance of the name, and want to add it
 		// to the end of the list now Paul: Might make sense to put these into Internal?
-		void* drumNameMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(DrumName));
+		void* drumNameMemory = allocExternal(sizeof(DrumName));
 		if (drumNameMemory) {
 			*prevPointer = new (drumNameMemory) DrumName(&soundDrum->name);
 		}

@@ -32,6 +32,7 @@
 #include "io/midi/midi_engine.h"
 #include "io/midi/midi_takeover.h"
 #include "mem_functions.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/instrument_clip.h"
 #include "model/note/note_row.h"
@@ -1742,7 +1743,7 @@ void ModControllableAudio::displayOtherModKnobSettings(uint8_t whichModButton, b
 bool ModControllableAudio::enableGrain() {
 
 	if (grainFX == nullptr) {
-		void* grainMemory = GeneralMemoryAllocator::get().allocStealable(sizeof(GranularProcessor));
+		void* grainMemory = allocStealable(sizeof(GranularProcessor));
 		if (grainMemory) {
 			grainFX = new (grainMemory) GranularProcessor;
 			return true;

@@ -23,7 +23,6 @@
 #include "gui/views/view.h"
 #include "hid/buttons.h"
 #include "hid/led/indicator_leds.h"
-#include "memory/general_memory_allocator.h"
 #include "model/action/action_logger.h"
 #include "model/mod_controllable/ModFXProcessor.h"
 #include "model/settings/runtime_feature_settings.h"

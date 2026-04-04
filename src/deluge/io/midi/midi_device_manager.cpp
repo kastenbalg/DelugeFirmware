@@ -26,7 +26,7 @@
 #include "io/midi/midi_device.h"
 #include "io/midi/midi_engine.h"
 #include "mem_functions.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "storage/storage_manager.h"
 #include "util/container/vector/named_thing_vector.h"
 #include "util/misc.h"
@@ -152,7 +152,7 @@ MIDICableUSBHosted* getOrCreateHostedMIDIDeviceFromDetails(String* name, uint16_
 
 	SpecificMidiDeviceType devType = getSpecificMidiDeviceType(vendorId, productId);
 	if (devType == SpecificMidiDeviceType::LUMI_KEYS) {
-		void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDIDeviceLumiKeys));
+		void* memory = allocExternal(sizeof(MIDIDeviceLumiKeys));
 		if (!memory) {
 			return nullptr;
 		}
@@ -161,7 +161,7 @@ MIDICableUSBHosted* getOrCreateHostedMIDIDeviceFromDetails(String* name, uint16_
 		device = instDevice;
 	}
 	else {
-		void* memory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(MIDICableUSBHosted));
+		void* memory = allocExternal(sizeof(MIDICableUSBHosted));
 		if (!memory) {
 			return nullptr;
 		}

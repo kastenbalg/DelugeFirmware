@@ -22,7 +22,6 @@
 #include "gui/ui/sound_editor.h"
 #include "gui/ui_timer_manager.h"
 #include "hid/display/display.h"
-#include "memory/general_memory_allocator.h"
 #include "processing/source.h"
 
 #include <etl/vector.h>

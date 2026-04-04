@@ -19,7 +19,7 @@
 #include "definitions_cxx.hpp"
 #include "hid/display/display.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample.h"
 #include "storage/audio/audio_file_manager.h"
 #include "storage/audio/audio_file_reader.h"
@@ -525,7 +525,7 @@ void AudioFile::removeReason(char const* errorCode) {
 	switch (action) {
 	case Action::becameZero:
 		numReasonsDecreasedToZero(errorCode);
-		GeneralMemoryAllocator::get().putStealableInQueue(this, StealableQueue::NO_SONG_AUDIO_FILE_OBJECTS);
+		putStealableInQueue(this, StealableQueue::NO_SONG_AUDIO_FILE_OBJECTS);
 		break;
 	case Action::negativeError:
 #if ALPHA_OR_BETA_VERSION

@@ -29,7 +29,7 @@
 #include "hid/display/display.h"
 #include "hid/led/indicator_leds.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action.h"
 #include "model/action/action_clip_state.h"
 #include "model/clip/audio_clip.h"
@@ -142,7 +142,7 @@ Action* ActionLogger::getNewAction(ActionType newActionType, ActionAddition addT
 		}
 
 		// And make a new one
-		void* actionMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(Action));
+		void* actionMemory = allocExternal(sizeof(Action));
 
 		if (!actionMemory) {
 			D_PRINTLN("no ram to create new Action");
@@ -153,8 +153,7 @@ Action* ActionLogger::getNewAction(ActionType newActionType, ActionAddition addT
 		int32_t numClips =
 		    currentSong->sessionClips.getNumElements() + currentSong->arrangementOnlyClips.getNumElements();
 
-		ActionClipState* clipStates =
-		    (ActionClipState*)GeneralMemoryAllocator::get().allocLowSpeed(numClips * sizeof(ActionClipState));
+		ActionClipState* clipStates = (ActionClipState*)allocExternal(numClips * sizeof(ActionClipState));
 
 		if (!clipStates) {
 			delugeDealloc(actionMemory);
@@ -260,7 +259,7 @@ void ActionLogger::recordSwingChange(int8_t swingBefore, int8_t swingAfter) {
 		consequence->swing[AFTER] = swingAfter;
 	}
 	else {
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceSwingChange));
+		void* consMemory = allocExternal(sizeof(ConsequenceSwingChange));
 
 		if (consMemory) {
 			ConsequenceSwingChange* newConsequence = new (consMemory) ConsequenceSwingChange(swingBefore, swingAfter);
@@ -283,7 +282,7 @@ void ActionLogger::recordTempoChange(uint64_t timePerBigBefore, uint64_t timePer
 	}
 	else {
 
-		void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceTempoChange));
+		void* consMemory = allocExternal(sizeof(ConsequenceTempoChange));
 
 		if (consMemory) {
 			ConsequenceTempoChange* newConsequence =
@@ -303,7 +302,7 @@ void ActionLogger::recordPerformanceViewPress(FXColumnPress fxPressBefore[kDispl
 		return;
 	}
 
-	void* consMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequencePerformanceViewPress));
+	void* consMemory = allocExternal(sizeof(ConsequencePerformanceViewPress));
 
 	if (consMemory) {
 		ConsequencePerformanceViewPress* newConsequence =

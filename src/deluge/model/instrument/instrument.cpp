@@ -18,7 +18,7 @@
 #include "model/instrument/instrument.h"
 #include "definitions_cxx.hpp"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"
 #include "model/instrument/midi_instrument.h"
@@ -145,7 +145,7 @@ bool Instrument::readTagFromFile(Deserializer& reader, char const* tagName) {
 Clip* Instrument::createNewClipForArrangementRecording(ModelStack* modelStack) {
 
 	// Allocate memory for Clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(sizeof(InstrumentClip));
 	if (!clipMemory) {
 		return nullptr;
 	}

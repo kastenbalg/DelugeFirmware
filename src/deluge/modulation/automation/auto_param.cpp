@@ -24,7 +24,7 @@
 #include "hid/display/display.h"
 #include "hid/matrix/matrix_driver.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action.h"
 #include "model/action/action_logger.h"
 #include "model/clip/instrument_clip.h"
@@ -2215,11 +2215,10 @@ void AutoParam::copy(int32_t startPos, int32_t endPos, CopiedParamAutomation* co
 	if (copiedParamAutomation->numNodes > 0) {
 		// Allocate some memory for the nodes
 		if (copiedParamAutomation->nodes != nullptr) {
-			GeneralMemoryAllocator::get().dealloc(copiedParamAutomation->nodes);
+			delugeDealloc(copiedParamAutomation->nodes);
 		}
 
-		copiedParamAutomation->nodes = (ParamNode*)GeneralMemoryAllocator::get().allocLowSpeed(
-		    sizeof(ParamNode) * copiedParamAutomation->numNodes);
+		copiedParamAutomation->nodes = (ParamNode*)allocExternal(sizeof(ParamNode) * copiedParamAutomation->numNodes);
 
 		if (!copiedParamAutomation->nodes) {
 			copiedParamAutomation->numNodes = 0;
@@ -2787,7 +2786,7 @@ void AutoParam::stealNodes(ModelStackWithAutoParam const* modelStack, int32_t po
 				action->recordParamChangeIfNotAlreadySnapshotted(modelStack);
 			}
 
-			void* memory = GeneralMemoryAllocator::get().allocLowSpeed(numNodesToStealTotal * sizeof(ParamNode));
+			void* memory = allocExternal(numNodesToStealTotal * sizeof(ParamNode));
 			if (memory) {
 				ParamNode* stolenNodes = (ParamNode*)memory;
 				stolenNodeRecord->nodes = stolenNodes;

@@ -37,7 +37,7 @@
 #include "hid/led/indicator_leds.h"
 #include "io/debug/log.h"
 #include "io/midi/midi_engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/instrument/kit.h"
 #include "model/mod_controllable/mod_controllable_audio.h"
 #include "model/sample/sample_recorder.h"
@@ -587,7 +587,7 @@ constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 /// With DMA interrupt-driven scheduling, this renders exactly one half-buffer
 /// (128 samples) per invocation. No tick logic — the sequencer task handles that.
 [[gnu::hot]] void routine_() {
-	GeneralMemoryAllocator::get().checkStack("AudioDriver::routine");
+	checkStack("AudioDriver::routine");
 
 #if AUTOMATED_TESTER_ENABLED
 	AutomatedTester::possiblyDoSomething();
@@ -1449,7 +1449,7 @@ LiveInputBuffer* getOrCreateLiveInputBuffer(OscType inputType, bool mayCreate) {
 			size += kInputRawBufferSize * sizeof(int32_t);
 		}
 
-		void* memory = GeneralMemoryAllocator::get().allocMaxSpeed(size);
+		void* memory = allocInternal(size);
 		if (!memory) {
 			return nullptr;
 		}
@@ -1554,7 +1554,7 @@ SampleRecorder* getNewRecorder(int32_t numChannels, AudioRecordingFolder folderI
                                bool shouldNormalize, Output* outputRecordingFrom) {
 	Error error;
 
-	void* recorderMemory = GeneralMemoryAllocator::get().allocMaxSpeed(sizeof(SampleRecorder));
+	void* recorderMemory = allocInternal(sizeof(SampleRecorder));
 	if (!recorderMemory) {
 		return nullptr;
 	}

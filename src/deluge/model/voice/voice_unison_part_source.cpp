@@ -18,7 +18,7 @@
 #include "model/voice/voice_unison_part_source.h"
 #include "dsp/dx/dx7note.h"
 #include "dsp/dx/engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample_cache.h"
 #include "model/song/song.h"
 #include "model/voice/voice.h"

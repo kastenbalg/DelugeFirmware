@@ -1,5 +1,5 @@
 #pragma once
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "util/exceptions.h"
 #include <cstddef>
 extern "C" {
@@ -29,14 +29,14 @@ public:
 		if (n == 0) {
 			return nullptr;
 		}
-		void* addr = GeneralMemoryAllocator::get().allocLowSpeed(n * sizeof(T));
+		void* addr = allocExternal(n * sizeof(T));
 		if (addr == nullptr) [[unlikely]] {
 			throw deluge::exception::BAD_ALLOC;
 		}
 		return static_cast<T*>(addr);
 	}
 
-	void deallocate(T* p, std::size_t n) { GeneralMemoryAllocator::get().dealloc(p); }
+	void deallocate(T* p, std::size_t n) { delugeDealloc(p); }
 
 	template <typename U>
 	bool operator==(const sdram_allocator<U>& o) {

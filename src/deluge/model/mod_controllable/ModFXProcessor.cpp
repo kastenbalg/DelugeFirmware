@@ -18,7 +18,7 @@
 #include "ModFXProcessor.h"
 #include "definitions_cxx.hpp"
 #include "mem_functions.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "modulation/params/param_set.h"
 #include "processing/engines/audio_engine.h"
 #include "util/comparison.h"

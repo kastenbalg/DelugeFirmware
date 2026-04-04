@@ -46,7 +46,7 @@
 #include "io/debug/log.h"
 #include "io/midi/device_specific/specific_midi_device.h"
 #include "io/midi/midi_engine.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_instance.h"
@@ -1650,7 +1650,7 @@ void ArrangerView::createNewClipForClipInstance(Output* output, ClipInstance* cl
 
 	int32_t size = (output->type == OutputType::AUDIO) ? sizeof(AudioClip) : sizeof(InstrumentClip);
 
-	void* memory = GeneralMemoryAllocator::get().allocLowSpeed(size);
+	void* memory = allocExternal(size);
 	if (!memory) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return exitSubModeWithoutAction();
@@ -2795,8 +2795,7 @@ ActionResult ArrangerView::horizontalEncoderAction(int32_t offset) {
 					        ->addParamCollection(unpatchedParams, unpatchedParamsSummary);
 
 					if (offset >= 0) {
-						void* consMemory =
-						    GeneralMemoryAllocator::get().allocLowSpeed(sizeof(ConsequenceArrangerParamsTimeInserted));
+						void* consMemory = allocExternal(sizeof(ConsequenceArrangerParamsTimeInserted));
 						if (consMemory) {
 							ConsequenceArrangerParamsTimeInserted* consequence = new (consMemory)
 							    ConsequenceArrangerParamsTimeInserted(currentSong->xScroll[NAVIGATION_ARRANGEMENT],

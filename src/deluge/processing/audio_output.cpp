@@ -20,7 +20,7 @@
 #include "definitions_cxx.hpp"
 #include "dsp/stereo_sample.h"
 #include "gui/views/view.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/clip/audio_clip.h"
 #include "model/model_stack.h"
 #include "model/song/song.h"
@@ -376,7 +376,7 @@ void AudioOutput::deleteBackedUpParamManagers(Song* song) {
 Clip* AudioOutput::createNewClipForArrangementRecording(ModelStack* modelStack) {
 
 	// Allocate memory for audio clip
-	void* clipMemory = GeneralMemoryAllocator::get().allocLowSpeed(sizeof(AudioClip));
+	void* clipMemory = allocExternal(sizeof(AudioClip));
 	if (!clipMemory) {
 		return nullptr;
 	}

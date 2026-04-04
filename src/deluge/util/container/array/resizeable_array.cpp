@@ -21,7 +21,7 @@
 // #include <algorithm>
 #include "hid/display/display.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "util/functions.h"
 #include <string.h>
 
@@ -150,7 +150,7 @@ Error ResizeableArray::copyElementsFromOldMemory(void* __restrict__ otherMemory,
 	else {
 		int32_t newSize = numElements + 1;
 		uint32_t allocatedSize = newSize * elementSize;
-		memory = GeneralMemoryAllocator::get().allocMaxSpeed(allocatedSize);
+		memory = allocInternal(allocatedSize);
 
 		if (!memory) {
 			numElements = 0;
@@ -214,7 +214,7 @@ void ResizeableArray::attemptMemoryShorten() {
 		return;
 	}
 
-	uint32_t allocatedSize = GeneralMemoryAllocator::get().getAllocatedSize(memoryAllocationStart);
+	uint32_t allocatedSize = getAllocatedSize(memoryAllocationStart);
 
 	if (allocatedSize > (memorySize + maxNumEmptySpacesToKeep) * elementSize) {
 		int32_t extraSpaceLeft = (uint32_t)memory - (uint32_t)memoryAllocationStart;
@@ -222,13 +222,12 @@ void ResizeableArray::attemptMemoryShorten() {
 		int32_t extraSpaceRight = allocatedSize - extraSpaceLeft - memorySize * elementSize;
 
 		if (extraSpaceLeft > extraSpaceRight) {
-			uint32_t amountShortened = GeneralMemoryAllocator::get().shortenLeft(memoryAllocationStart, extraSpaceLeft);
+			uint32_t amountShortened = shortenLeft(memoryAllocationStart, extraSpaceLeft);
 			memoryAllocationStart = (char* __restrict__)memoryAllocationStart + amountShortened;
 		}
 
 		else {
-			GeneralMemoryAllocator::get().shortenRight(memoryAllocationStart,
-			                                           extraSpaceLeft + memorySize * elementSize);
+			shortenRight(memoryAllocationStart, extraSpaceLeft + memorySize * elementSize);
 		}
 	}
 }
@@ -474,7 +473,7 @@ bool ResizeableArray::ensureEnoughSpaceAllocated(int32_t numAdditionalElementsNe
 
 		uint32_t allocatedMemorySize = numAdditionalElementsNeeded * elementSize;
 
-		void* newMemory = GeneralMemoryAllocator::get().allocMaxSpeed(allocatedMemorySize);
+		void* newMemory = allocInternal(allocatedMemorySize);
 		if (!newMemory) {
 			LOCK_EXIT
 			return false;
@@ -496,7 +495,7 @@ bool ResizeableArray::ensureEnoughSpaceAllocated(int32_t numAdditionalElementsNe
 	int32_t oldMemorySize = memorySize;
 
 tryAgain:
-	uint32_t allocatedSize = GeneralMemoryAllocator::get().getAllocatedSize(memoryAllocationStart);
+	uint32_t allocatedSize = getAllocatedSize(memoryAllocationStart);
 
 	// Try expanding left into existing memory
 	uint32_t extraSpaceLeft = (uint32_t)memory - (uint32_t)memoryAllocationStart;
@@ -526,9 +525,9 @@ tryAgain:
 		if (getRandom255() < 10)
 			goto getBrandNewMemory;
 #endif
-		GeneralMemoryAllocator::get().extend(memoryAllocationStart, (newNum)*elementSize - allocatedSize,
-		                                     (newNum + numExtraSpacesToAllocate) * elementSize - allocatedSize,
-		                                     &amountExtendedLeft, &amountExtendedRight);
+		memoryExtend(memoryAllocationStart, (newNum)*elementSize - allocatedSize,
+		             (newNum + numExtraSpacesToAllocate) * elementSize - allocatedSize, &amountExtendedLeft,
+		             &amountExtendedRight);
 
 		// If successfully extended...
 		if (amountExtendedLeft || amountExtendedRight) {
@@ -550,10 +549,10 @@ getBrandNewMemory:
 #endif
 
 		uint32_t newMemoryAllocationSize = (newNum + numExtraSpacesToAllocate) * elementSize;
-		newMemory = GeneralMemoryAllocator::get().allocMaxSpeed(newMemoryAllocationSize);
+		newMemory = allocInternal(newMemoryAllocationSize);
 		if (!newMemory) {
 			newMemoryAllocationSize = newNum * elementSize;
-			newMemory = GeneralMemoryAllocator::get().allocMaxSpeed(newMemoryAllocationSize);
+			newMemory = allocInternal(newMemoryAllocationSize);
 		}
 
 		// If that didn't work...
@@ -662,7 +661,7 @@ startAgain:
 	// If we actually had a bit more already, right...
 	uint32_t potentialMemorySize = staticMemoryAllocationSize;
 	if (!potentialMemorySize) {
-		potentialMemorySize = GeneralMemoryAllocator::get().getAllocatedSize(memoryAllocationStart) - extraBytesLeft;
+		potentialMemorySize = getAllocatedSize(memoryAllocationStart) - extraBytesLeft;
 	}
 	uint32_t extraBytesRight = potentialMemorySize - (memorySize * elementSize);
 	if (extraBytesRight >= elementSize) {
@@ -693,9 +692,9 @@ startAgain:
 		// TODO: in a perfect world, we'd be able to specify a minimum amount as well as a step-size for left and right,
 		// or something like that
 		uint32_t amountExtendedLeft, amountExtendedRight;
-		GeneralMemoryAllocator::get().extend(memoryAllocationStart, minNumToExtend * elementSize,
-		                                     idealNumToExtendIfExtendingAllocation * elementSize, &amountExtendedLeft,
-		                                     &amountExtendedRight, thingNotToStealFrom);
+		memoryExtend(memoryAllocationStart, minNumToExtend * elementSize,
+		             idealNumToExtendIfExtendingAllocation * elementSize, &amountExtendedLeft, &amountExtendedRight,
+		             thingNotToStealFrom);
 
 		if (amountExtendedLeft || amountExtendedRight) {
 			memoryAllocationStart = (char* __restrict__)memoryAllocationStart - amountExtendedLeft;
@@ -916,7 +915,7 @@ Error ResizeableArray::insertAtIndex(int32_t i, int32_t numToInsert, void* thing
 
 		uint32_t allocatedMemorySize = newMemorySize * elementSize;
 
-		void* newMemory = GeneralMemoryAllocator::get().allocMaxSpeed(allocatedMemorySize, thingNotToStealFrom);
+		void* newMemory = allocInternal(allocatedMemorySize, thingNotToStealFrom);
 		if (!newMemory) {
 			LOCK_EXIT
 			return Error::INSUFFICIENT_RAM;
@@ -1093,8 +1092,7 @@ getBrandNewMemory:
 
 getBrandNewMemoryAgain:
 			uint32_t allocatedSize = desiredSize;
-			void* __restrict__ newMemory =
-			    GeneralMemoryAllocator::get().allocMaxSpeed(allocatedSize, thingNotToStealFrom);
+			void* __restrict__ newMemory = allocInternal(allocatedSize, thingNotToStealFrom);
 
 			// If that didn't work...
 			if (!newMemory) {

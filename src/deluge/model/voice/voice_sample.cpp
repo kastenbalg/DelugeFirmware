@@ -19,7 +19,7 @@
 #include "definitions_cxx.hpp"
 #include "dsp/timestretch/time_stretcher.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample.h"
 #include "model/sample/sample_cache.h"
 #include "model/voice/voice.h"
@@ -1155,7 +1155,7 @@ readTimestretched:
 			int32_t numSamplesThisTimestretchedRead = numSamplesThisUncachedRead;
 
 			// Now, perform the actual time stretching on the contents of the bands
-			GeneralMemoryAllocator::get().checkStack("timestretch");
+			checkStack("timestretch");
 
 			if (timeStretcher->playHeadStillActive[PLAY_HEAD_NEWER]) {
 

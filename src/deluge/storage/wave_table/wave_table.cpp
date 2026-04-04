@@ -22,7 +22,7 @@
 #include "dsp/fft/fft_config_manager.h"
 #include "dsp/interpolate/interpolate.h"
 #include "io/debug/log.h"
-#include "memory/general_memory_allocator.h"
+#include "memory/memory_allocator_interface.h"
 #include "model/sample/sample.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/render_wave.h"
@@ -266,8 +266,7 @@ gotError2:
 		    numCycles * (cycleSizeNoDuplicates + WAVETABLE_NUM_DUPLICATE_SAMPLES_AT_END_OF_CYCLE);
 		int32_t bandSizeBytesWithDuplicates = bandSizeSamplesWithDuplicates << 1; // All bands contain just 16-bit data.
 		// Ironically we'll even do that if the source file was just 8-bit, but that's really uncommon.
-		void* bandDataMemory =
-		    GeneralMemoryAllocator::get().allocStealable(bandSizeBytesWithDuplicates + sizeof(WaveTableBandData));
+		void* bandDataMemory = allocStealable(bandSizeBytesWithDuplicates + sizeof(WaveTableBandData));
 		if (!bandDataMemory) {
 			error = Error::INSUFFICIENT_RAM;
 			// All bands from this one onwards still have undefined data, so gotta get rid of them before anything else
@@ -303,8 +302,7 @@ gotError2:
 	// not a power-of-two).
 	int32_t currentCycleMemorySize = std::max(rawFileCycleSize, initialBandCycleSizeNoDuplicates);
 	// Internal RAM is good, and it's only temporary
-	int32_t* __restrict__ currentCycleInt32 =
-	    (int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(currentCycleMemorySize * sizeof(int32_t));
+	int32_t* __restrict__ currentCycleInt32 = (int32_t*)allocExternal(currentCycleMemorySize * sizeof(int32_t));
 	if (!currentCycleInt32) {
 		error = Error::INSUFFICIENT_RAM;
 		goto gotError2;
@@ -314,8 +312,7 @@ gotError2:
 	// use that same decision here
 	// - except for frequency-domain complex numbers, we only need to store half of it, plus one.
 	ne10_fft_cpx_int32_t* __restrict__ frequencyDomainData =
-	    (ne10_fft_cpx_int32_t*)GeneralMemoryAllocator::get().allocLowSpeed(((currentCycleMemorySize >> 1) + 1)
-	                                                                       * sizeof(ne10_fft_cpx_int32_t));
+	    (ne10_fft_cpx_int32_t*)allocExternal(((currentCycleMemorySize >> 1) + 1) * sizeof(ne10_fft_cpx_int32_t));
 	if (!frequencyDomainData) {
 		error = Error::INSUFFICIENT_RAM;
 gotError4:
@@ -794,7 +791,7 @@ transformBandToTimeDomain:
 				                      * (band->cycleSizeNoDuplicates + WAVETABLE_NUM_DUPLICATE_SAMPLES_AT_END_OF_CYCLE)
 				                      * sizeof(int16_t)
 				                  + sizeof(WaveTableBandData);
-				GeneralMemoryAllocator::get().shortenRight(band->data, newSize);
+				shortenRight(band->data, newSize);
 			}
 
 			// Left-hand side
@@ -802,9 +799,9 @@ transformBandToTimeDomain:
 				uint32_t idealAmountToShorten =
 				    band->fromCycleNumber
 				    * (band->cycleSizeNoDuplicates + WAVETABLE_NUM_DUPLICATE_SAMPLES_AT_END_OF_CYCLE) * sizeof(int16_t);
-				uint32_t amountShortened = GeneralMemoryAllocator::get().shortenLeft(
-				    band->data, idealAmountToShorten,
-				    sizeof(WaveTableBandData)); // Tell it to move the WaveTableBandData "header" forward
+				uint32_t amountShortened =
+				    shortenLeft(band->data, idealAmountToShorten,
+				                sizeof(WaveTableBandData)); // Tell it to move the WaveTableBandData "header" forward
 				band->data = (WaveTableBandData*)((uint32_t)band->data + amountShortened);
 			}
 		}
@@ -1203,7 +1200,7 @@ void WaveTable::numReasonsDecreasedToZero(char const* errorCode) {
 				FREEZE_WITH_ERROR("E388");
 			}
 #endif
-			GeneralMemoryAllocator::get().putStealableInQueue(band->data, StealableQueue::NO_SONG_WAVETABLE_BAND_DATA);
+			putStealableInQueue(band->data, StealableQueue::NO_SONG_WAVETABLE_BAND_DATA);
 		}
 	}
 }
