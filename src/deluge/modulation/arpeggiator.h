@@ -236,6 +236,11 @@ public:
 	virtual ArpType getArpType() = 0;
 	ArpNote active_note; // For the currently active note.
 
+	/** Current note index within the arp's note list (for prefetch priority). */
+	int16_t getCurrentNoteIndex() const { return whichNoteCurrentlyOnPostArp; }
+	/** Current octave offset (for prefetch priority). */
+	int8_t getCurrentOctave() const { return currentOctave; }
+
 	std::array<int16_t, ARP_MAX_INSTRUCTION_NOTES> glideNoteCodeCurrentlyOnPostArp;
 	std::array<uint8_t, ARP_MAX_INSTRUCTION_NOTES> outputMIDIChannelForGlideNoteCurrentlyOnPostArp;
 	uint32_t gatePos = 0;

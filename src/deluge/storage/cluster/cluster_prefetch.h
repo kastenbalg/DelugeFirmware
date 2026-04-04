@@ -20,16 +20,23 @@
 #include <cstdint>
 
 /**
- * Prefetch sample clusters for upcoming sequenced notes.
+ * Prefetch sample clusters for upcoming notes and arpeggiator note pools.
  *
- * Called from the sequencer task after processing ticks. Scans each active
- * InstrumentClip's NoteRows to find notes that will fire within the
- * look-ahead window, resolves them to Samples, and enqueues their starting
- * clusters for loading.
+ * Called from the sequencer task after processing ticks. Three tiers:
  *
- * This ensures clusters are loaded BEFORE the audio task needs them,
- * eliminating the "-  F" (file not found) errors that occur when the
- * audio task discovers an unloaded cluster mid-render.
+ * Tier 1: Drain active voice hints — clusters needed within ~93ms by
+ *         currently-playing voices crossing cluster boundaries.
+ *
+ * Tier 2: Scan upcoming note starts — scans each active InstrumentClip's
+ *         NoteRows to find notes that will fire within the look-ahead
+ *         window and enqueues their starting clusters.
+ *
+ * Tier 3: Arpeggiator note pool — enumerates all notes an active
+ *         arpeggiator could generate (input notes × octave range × chord
+ *         offsets), resolves them to Samples, and prefetches their starting
+ *         clusters with priority based on distance from the arp's current
+ *         position. This prevents note skipping when the arp generates
+ *         notes that map to samples not yet loaded.
  *
  * @param lookAheadTicks  How far ahead to scan in internal tick units.
  *                        Should cover at least 2 cluster load times (~32ms).
