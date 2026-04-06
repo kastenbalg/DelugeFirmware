@@ -372,6 +372,7 @@ static void sequencerRoutine() {
 	 * tick dropping for overload) can be revisited when the port is more complete. */
 	uint32_t bufferEnd = AudioEngine::audioSampleTimer + kHalfBufferSamples;
 
+	/* Process all timer and swung ticks within this buffer window. */
 	for (;;) {
 		/* No safety counter — the original tickSongFinalizeWindows had none.
 		 * Each tick advances timeNextTimerTickBig/scheduledSwungTickTime,
@@ -403,24 +404,36 @@ static void sequencerRoutine() {
 			playbackHandler.actionSwungTick();
 			playbackHandler.scheduleSwungTick();
 		}
+	}
 
-		/* Handle MIDI clock and trigger clock output.
-		 * TODO Step 7: move to hardware timer for sub-buffer precision. */
-		if (playbackHandler.triggerClockOutTickScheduled) {
-			int32_t timeTil = playbackHandler.timeNextTriggerClockOutTick - AudioEngine::audioSampleTimer;
-			if (timeTil < (int32_t)kHalfBufferSamples) {
-				playbackHandler.doTriggerClockOutTick();
-				playbackHandler.scheduleTriggerClockOutTick();
-			}
+	/* Drain all pending clock output ticks for this buffer.
+	 * Clock ticks fire at a higher rate than timer/swung ticks (e.g. 24 PPQN),
+	 * so multiple clock ticks can fall within a single buffer. Each iteration
+	 * advances state, enqueues an AudioEvent if not skipped, and schedules the
+	 * next clock tick. The loop runs until no more clock ticks fall within
+	 * this buffer window. */
+	while (playbackHandler.triggerClockOutTickScheduled) {
+		int32_t timeTil = playbackHandler.timeNextTriggerClockOutTick - AudioEngine::audioSampleTimer;
+		if (timeTil >= (int32_t)kHalfBufferSamples) {
+			break;
 		}
+		if (playbackHandler.advanceTriggerClockOutTick()) {
+			uint16_t offset = static_cast<uint16_t>(timeTil);
+			g_audioEventQueue.push(AudioEvent{AudioEvent::Type::TRIGGER_CLOCK_OUT, offset, 0});
+		}
+		playbackHandler.scheduleTriggerClockOutTick();
+	}
 
-		if (playbackHandler.midiClockOutTickScheduled) {
-			int32_t timeTil = playbackHandler.timeNextMIDIClockOutTick - AudioEngine::audioSampleTimer;
-			if (timeTil < (int32_t)kHalfBufferSamples) {
-				playbackHandler.doMIDIClockOutTick();
-				playbackHandler.scheduleMIDIClockOutTick();
-			}
+	while (playbackHandler.midiClockOutTickScheduled) {
+		int32_t timeTil = playbackHandler.timeNextMIDIClockOutTick - AudioEngine::audioSampleTimer;
+		if (timeTil >= (int32_t)kHalfBufferSamples) {
+			break;
 		}
+		if (playbackHandler.advanceMIDIClockOutTick()) {
+			uint16_t offset = static_cast<uint16_t>(timeTil);
+			g_audioEventQueue.push(AudioEvent{AudioEvent::Type::MIDI_CLOCK_OUT, offset, 1});
+		}
+		playbackHandler.scheduleMIDIClockOutTick();
 	}
 
 	playbackHandler.publishTempoState();

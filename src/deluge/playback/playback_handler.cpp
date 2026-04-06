@@ -64,6 +64,7 @@
 #include "processing/audio_output.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/engines/cv_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "processing/metronome/metronome.h"
 #include "processing/sound/sound_drum.h"
 #include "processing/sound/sound_instrument.h"
@@ -848,6 +849,26 @@ void PlaybackHandler::doMIDIClockOutTick() {
 	}
 }
 
+bool PlaybackHandler::advanceTriggerClockOutTick() {
+	triggerClockOutTickScheduled = false;
+	lastTriggerClockOutTickDone++;
+	if (skipAnalogClocks) {
+		skipAnalogClocks--;
+		return false;
+	}
+	return true;
+}
+
+bool PlaybackHandler::advanceMIDIClockOutTick() {
+	midiClockOutTickScheduled = false;
+	lastMIDIClockOutTickDone++;
+	if (skipMidiClocks) {
+		skipMidiClocks--;
+		return false;
+	}
+	return true;
+}
+
 void PlaybackHandler::actionSwungTick() {
 
 	currentlyActioningSwungTickOrResettingPlayPos = true;
@@ -944,7 +965,12 @@ doMetronome:
 				if ((currentMetronomeTick % swungTicksPerQuarterNote) == 0) {
 					uint32_t phaseIncrement =
 					    ((currentMetronomeTick % (swungTicksPerQuarterNote << 2)) == 0) ? 128411753 : 50960238;
+#ifdef USE_FREERTOS
+					g_audioEventQueue.push(
+					    AudioEvent{AudioEvent::Type::METRONOME_TRIGGER, 0, static_cast<int32_t>(phaseIncrement)});
+#else
 					AudioEngine::metronome.trigger(phaseIncrement);
+#endif
 				}
 
 				int32_t ticksIntoCurrentBeep = currentMetronomeTick % swungTicksPerQuarterNote;

@@ -190,6 +190,8 @@ public:
 	void tapTempoButtonPress(bool useNormalTapTempoBehaviour);
 	void doTriggerClockOutTick();
 	void doMIDIClockOutTick();
+	bool advanceTriggerClockOutTick(); ///< Advance state, return true if clock should fire (not skipped)
+	bool advanceMIDIClockOutTick();    ///< Advance state, return true if clock should fire (not skipped)
 	void resyncAnalogOutTicksToInternalTicks();
 	void resyncMIDIClockOutTicksToInternalTicks();
 	void analogClockRisingEdge(uint32_t time);

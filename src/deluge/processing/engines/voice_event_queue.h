@@ -48,24 +48,30 @@ class ArpeggiatorBase;
  * Uses a FreeRTOS queue for thread-safe MPSC operation.
  */
 
-/* ---- Audio events (sidechain, metronome) ---- */
+/* ---- Audio events (clock, metronome) ---- */
 
 /* These lightweight events need sample-accurate offset within the render buffer.
- * Kept as a separate SPSC path for minimal latency. */
+ * Kept as a separate SPSC path for minimal latency.
+ *
+ * Sequencer task produces events with pre-computed sample offsets.
+ * Audio task consumes them: metronome triggers start rendering at the offset,
+ * clock events arm the MTU2 timer for DMA-aligned physical output. */
 #include <etl/queue_spsc_atomic.h>
 
 struct AudioEvent {
 	enum class Type : uint8_t {
-		SIDECHAIN_HIT,
-		METRONOME_TRIGGER,
+		METRONOME_TRIGGER, ///< value = phaseIncrement, sampleOffset = position in buffer
+		MIDI_CLOCK_OUT,    ///< value = howMany (typically 1), sampleOffset = DMA-aligned position
+		TRIGGER_CLOCK_OUT, ///< value = unused, sampleOffset = DMA-aligned position
 	};
 
 	Type type;
-	uint8_t sampleOffset; ///< Sample position within the half-buffer (0-127)
+	uint16_t sampleOffset; ///< Sample position within the half-buffer (0 to kHalfBufferSamples-1)
 
 	/// Payload — interpretation depends on type.
-	/// SIDECHAIN_HIT: magnitude of the hit
 	/// METRONOME_TRIGGER: phase increment (different for beat vs off-beat)
+	/// MIDI_CLOCK_OUT: number of clock messages to send (typically 1)
+	/// TRIGGER_CLOCK_OUT: unused
 	int32_t value;
 };
 

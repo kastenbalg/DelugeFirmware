@@ -48,6 +48,7 @@
 #include "modulation/patch/patch_cable_set.h"
 #include "processing/audio_output.h"
 #include "processing/engines/cv_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "processing/live/live_input_buffer.h"
 #include "processing/metronome/metronome.h"
 #include "processing/sound/sound.h"
@@ -155,6 +156,7 @@ uint32_t timeLastSideChainHit = 2147483648;
 int32_t sizeLastSideChainHit;
 
 Metronome metronome{};
+uint16_t metronomeOffset = 0; ///< Sample offset for metronome trigger within current buffer
 StereoFloatSample approxRMSLevel{0};
 AbsValueFollower envelopeFollower{};
 int32_t timeLastPopup{0};
@@ -585,7 +587,7 @@ constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 
 /// inner loop of audio rendering, deliberately not in header.
 /// With DMA interrupt-driven scheduling, this renders exactly one half-buffer
-/// (128 samples) per invocation. No tick logic — the sequencer task handles that.
+/// per invocation. No tick logic — the sequencer task handles that.
 [[gnu::hot]] void routine_() {
 	checkStack("AudioDriver::routine");
 
@@ -593,6 +595,39 @@ constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 	AutomatedTester::possiblyDoSomething();
 #endif
 	flushMIDIGateBuffers();
+
+	/* Drain the audio event queue — process clock and metronome events
+	 * enqueued by the sequencer task. Clock events buffer MIDI/gate data
+	 * and record the earliest sample offset for MTU2 timer arming.
+	 * Metronome events trigger the metronome with a sub-buffer offset. */
+	int32_t earliestClockOffset = -1;
+	metronomeOffset = 0;
+	{
+		AudioEvent ev;
+		while (g_audioEventQueue.pop(ev)) {
+			switch (ev.type) {
+			case AudioEvent::Type::METRONOME_TRIGGER:
+				metronome.trigger(ev.value);
+				metronomeOffset = ev.sampleOffset;
+				break;
+			case AudioEvent::Type::MIDI_CLOCK_OUT:
+				if (midiEngine.anythingInOutputBuffer()) {
+					midiEngine.flushMIDI();
+				}
+				midiEngine.sendClock(MIDISource{}, true, ev.value);
+				if (earliestClockOffset < 0 || ev.sampleOffset < earliestClockOffset) {
+					earliestClockOffset = ev.sampleOffset;
+				}
+				break;
+			case AudioEvent::Type::TRIGGER_CLOCK_OUT:
+				cvEngine.analogOutTick();
+				if (earliestClockOffset < 0 || ev.sampleOffset < earliestClockOffset) {
+					earliestClockOffset = ev.sampleOffset;
+				}
+				break;
+			}
+		}
+	}
 
 	constexpr size_t numSamples = kHalfBufferNumSamples;
 
@@ -608,11 +643,12 @@ constexpr size_t kHalfBufferNumSamples = SSI_TX_BUFFER_NUM_SAMPLES / 2;
 	// Update direness EMA and check culling at buffer boundary
 	updateDirenessPostRender();
 
-	/* MIDI/gate output scheduling — for now pass defaults.
-	 * Step 7 will move clock output to the sequencer task via Timer 2. */
+	/* Arm MTU2 timer for sample-accurate MIDI/gate output.
+	 * earliestClockOffset is the sample position within this buffer at which
+	 * the first clock event should physically fire. -1 means no clock events. */
 	saddr = (uint32_t)(getTxBufferCurrentPlace());
 	uint32_t saddrPosAtStart = saddr >> (2 + NUM_MONO_OUTPUT_CHANNELS_MAGNITUDE);
-	scheduleMidiGateOutISR(saddrPosAtStart, numSamples, 0);
+	scheduleMidiGateOutISR(saddrPosAtStart, numSamples, earliestClockOffset);
 
 #if DO_AUDIO_LOG
 	dumpAudioLog();
@@ -648,7 +684,7 @@ void renderAudio(size_t numSamples) {
 
 	renderSongFX(numSamples);
 
-	metronome.render(renderingBuffer);
+	metronome.render(renderingBuffer.subspan(metronomeOffset));
 
 	approxRMSLevel = envelopeFollower.calcApproxRMS(renderingBuffer);
 
