@@ -486,55 +486,28 @@ finishedWhileLoop:
 }
 
 void AudioFile::addReason() {
-#ifdef USE_FREERTOS
-	taskENTER_CRITICAL();
-#endif
-	// If it was zero before, it's no longer unused
-	if (!numReasonsToBeLoaded) {
+	int32_t oldVal = numReasonsToBeLoaded.fetch_add(1, std::memory_order_acq_rel);
+	if (oldVal == 0) {
+		// Zero-to-nonzero transition — remove from stealable queue
 		remove();
 		numReasonsIncreasedFromZero();
 	}
-
-	numReasonsToBeLoaded++;
-#ifdef USE_FREERTOS
-	taskEXIT_CRITICAL();
-#endif
 }
 
 void AudioFile::removeReason(char const* errorCode) {
-	/* Decrement atomically, decide what to do, then act outside the critical
-	 * section (putStealableInQueue acquires the allocator mutex). */
-	enum class Action { none, becameZero, negativeError };
-	Action action = Action::none;
+	int32_t oldVal = numReasonsToBeLoaded.fetch_sub(1, std::memory_order_acq_rel);
 
-#ifdef USE_FREERTOS
-	taskENTER_CRITICAL();
-#endif
-	numReasonsToBeLoaded--;
-
-	if (numReasonsToBeLoaded == 0) {
-		action = Action::becameZero;
-	}
-	else if (numReasonsToBeLoaded < 0) {
-		action = Action::negativeError;
-	}
-#ifdef USE_FREERTOS
-	taskEXIT_CRITICAL();
-#endif
-
-	switch (action) {
-	case Action::becameZero:
+	if (oldVal == 1) {
+		// Was 1, now 0 — nonzero-to-zero transition
 		numReasonsDecreasedToZero(errorCode);
 		putStealableInQueue(this, StealableQueue::NO_SONG_AUDIO_FILE_OBJECTS);
-		break;
-	case Action::negativeError:
+	}
+	else if (oldVal <= 0) {
+		// Was already 0 or negative — bug
 #if ALPHA_OR_BETA_VERSION
 		FREEZE_WITH_ERROR("E004"); // Luc got this! And Paolo. (Must have been years ago :D)
 #endif
-		numReasonsToBeLoaded = 0; // Save it from crashing
-		break;
-	default:
-		break;
+		numReasonsToBeLoaded.store(0, std::memory_order_relaxed); // Save it from crashing
 	}
 }
 

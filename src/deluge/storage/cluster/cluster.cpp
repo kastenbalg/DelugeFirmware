@@ -261,17 +261,12 @@ bool Cluster::mayBeStolen(void* thingNotToStealFrom) {
 }
 
 void Cluster::addReason() {
-#ifdef USE_FREERTOS
-	taskENTER_CRITICAL();
-#endif
-	// If it's going to cease to be zero, it's become unavailable,
-	// so remove it from the stealables queue
-	if (this->numReasonsToBeLoaded == 0) {
+	// Atomically increment. If the old value was 0 (zero-to-nonzero transition),
+	// the cluster is being reclaimed from the stealable queue.
+	int32_t oldVal = this->numReasonsToBeLoaded.fetch_add(1, std::memory_order_acq_rel);
+	if (oldVal == 0) {
+		// Was in stealable queue — remove it. Safe even if steal races us:
+		// mayBeStolen() checks numReasonsToBeLoaded and will see it's now > 0.
 		this->remove();
 	}
-
-	this->numReasonsToBeLoaded++;
-#ifdef USE_FREERTOS
-	taskEXIT_CRITICAL();
-#endif
 }

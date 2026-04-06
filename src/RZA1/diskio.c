@@ -205,10 +205,6 @@ DRESULT disk_read_without_streaming_first(BYTE pdrv, /* Physical drive nmuber to
     BYTE err;
 
 #ifdef USE_FREERTOS
-    /* When the async SD layer is active, enqueue a slow-path read request.
-     * The ISR state machine processes it asynchronously with sector-level
-     * interleaving against cluster reads. The calling task blocks on a
-     * semaphore until all sectors are transferred. */
     if (sdAsyncIsActive())
     {
         int32_t result = sdAsyncSyncRead(sector, buff, count);

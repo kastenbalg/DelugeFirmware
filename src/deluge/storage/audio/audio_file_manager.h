@@ -23,6 +23,12 @@
 #include <array>
 #include <cstdint>
 
+#ifdef USE_FREERTOS
+extern "C" {
+#include "OSLikeStuff/freertos/freertos_mutex.h"
+}
+#endif
+
 extern "C" {
 #include "fatfs/ff.h"
 }
@@ -118,6 +124,30 @@ public:
 	void setCardEjected() { cardEjected = true; }
 
 	ClusterPriorityQueue loadingQueue;
+
+#ifdef USE_FREERTOS
+	/// Mutex protecting audioFiles vector, loadingQueue, and stealable queue operations.
+	/// Acquired by Storage and Sequencer tasks for short container operations.
+	/// Never acquired by Audio task (zero contention on the hot path).
+	rtos_mutex_t afmMutex = nullptr;
+#endif
+
+	/// RAII lock guard for afmMutex. No-op on non-FreeRTOS builds.
+	struct Lock {
+		[[maybe_unused]] AudioFileManager& mgr;
+		Lock(AudioFileManager& m) : mgr(m) {
+#ifdef USE_FREERTOS
+			rtos_mutex_lock(mgr.afmMutex);
+#endif
+		}
+		~Lock() {
+#ifdef USE_FREERTOS
+			rtos_mutex_unlock(mgr.afmMutex);
+#endif
+		}
+		Lock(const Lock&) = delete;
+		Lock& operator=(const Lock&) = delete;
+	};
 
 	Cluster* clusterBeingLoaded;
 	int32_t minNumReasonsForClusterBeingLoaded; // Only valid when clusterBeingLoaded is set. And this exists for bug

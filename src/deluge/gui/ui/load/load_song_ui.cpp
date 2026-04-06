@@ -49,7 +49,9 @@
 #include "storage/audio/audio_file_manager.h"
 #include "storage/file_item.h"
 #include "storage/flash_storage.h"
+#include "storage/song_loader.h"
 #include "storage/storage_manager.h"
+#include "storage/storage_task.h"
 #include "util/try.h"
 #include <string.h>
 
@@ -339,10 +341,6 @@ void LoadSongUI::performLoad() {
 	if (arrangement.hasPlaybackActive()) {
 		playbackHandler.switchToSession();
 	}
-	Error error;
-
-	terminate_set_context("TLD2"); /* Terminate during song load - open file */
-	error = StorageManager::openDelugeFile(currentFileItem, "song");
 
 	currentUIMode = UI_MODE_LOADING_SONG_ESSENTIAL_SAMPLES;
 	indicator_leds::setLedState(IndicatorLED::LOAD, false);
@@ -353,17 +351,77 @@ void LoadSongUI::performLoad() {
 
 	deletedPartsOfOldSong = true;
 
+	bool isPlaying = playbackHandler.isEitherClockActive();
+
 	/* Cluster loading continues during song load — the currently-playing song's
 	 * voices still need their clusters. The ISR interleaves cluster reads with
 	 * FatFS reads for the new song's XML parsing. */
 
 	// If not currently playing, don't load both songs at once (this avoids any RAM overfilling, fragmentation etc.)
-	if (!playbackHandler.isEitherClockActive()) {
+	if (!isPlaying) {
 		// Otherwise, a timer might get called and try to access Clips that we may have deleted below (really?)
 		uiTimerManager.unsetTimer(TimerName::PLAY_ENABLE_FLASH);
 
 		terminate_set_context("TLD7"); /* Terminate during song load - deleteOldSong */
 		deleteOldSongBeforeLoadingNew();
+
+#ifdef USE_FREERTOS
+		// Offload song loading to the storage task. The storage task will:
+		// 1. Parse XML and construct Song
+		// 2. Load sample clusters
+		// 3. Signal sequencer to swap via SONG_READY event
+		// 4. Tear down old song (already deleted above)
+		{
+			StorageCommand cmd{};
+			cmd.type = StorageCommandType::LOAD_SONG;
+			cmd.requestingTask = xTaskGetCurrentTaskHandle();
+			// Copy FilePointer by value — the FileItem* may become invalid after enqueue
+			cmd.loadSong.filePointerSclust = currentFileItem->filePointer.sclust;
+			cmd.loadSong.filePointerObjsize = currentFileItem->filePointer.objsize;
+			// Copy filename to detect .Json extension on storage task
+			strncpy(cmd.loadSong.filename, currentFileItem->filename.get(), kStoragePathMaxLen - 1);
+			cmd.loadSong.filename[kStoragePathMaxLen - 1] = '\0';
+			strncpy(cmd.loadSong.dirPath, currentDir.get(), kStoragePathMaxLen - 1);
+			cmd.loadSong.dirPath[kStoragePathMaxLen - 1] = '\0';
+			strncpy(cmd.loadSong.songName, enteredText.get(), kStoragePathMaxLen - 1);
+			cmd.loadSong.songName[kStoragePathMaxLen - 1] = '\0';
+			cmd.loadSong.isPlaying = false;
+			storageCommandEnqueue(cmd);
+		}
+
+		ulTaskNotifyTake(pdTRUE, 0);             // clear any stale notification
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // block until sequencer signals
+
+		// Post-swap finalization
+		audioFileManager.deleteAnyTempRecordedSamplesFromMemory();
+		currentSong->loadAllSamples();
+		AudioEngine::logAction("done loading new song");
+		currentSong->markAllInstrumentsAsEdited();
+
+		PadLEDs::doGreyoutInstantly();
+		setUIForLoadedSong(currentSong);
+		currentUIMode = UI_MODE_NONE;
+		display->removeWorkingAnimation();
+
+		// Load MIDI device definitions for the new song
+		for (Output* thisOutput = currentSong->firstOutput; thisOutput; thisOutput = thisOutput->next) {
+			if (thisOutput && thisOutput->type == OutputType::MIDI_OUT) {
+				MIDIInstrument* midiInstrument = (MIDIInstrument*)thisOutput;
+				if (midiInstrument->loadDeviceDefinitionFile) {
+					FilePointer tempfp;
+					bool fileExists =
+					    StorageManager::fileExists(midiInstrument->deviceDefinitionFileName.get(), &tempfp);
+					if (fileExists) {
+						StorageManager::loadMidiDeviceDefinitionFile(midiInstrument, &tempfp,
+						                                             &midiInstrument->deviceDefinitionFileName, false);
+					}
+				}
+			}
+		}
+
+		performingLoad = false;
+		return;
+#endif
 	}
 	else {
 		// Note: this is dodgy, but in this case we don't reset view.activeControllableClip here - we let the user keep
@@ -375,112 +433,38 @@ void LoadSongUI::performLoad() {
 		playbackHandler.songSwapShouldPreserveTempo = Buttons::isButtonPressed(deluge::hid::button::TEMPO_ENC);
 	}
 
-	terminate_set_context("TLD6"); /* Terminate during song load - alloc Song */
-	void* songMemory = allocExternal(sizeof(Song));
-	terminate_set_context("TD6A"); /* alloc returned */
-	if (!songMemory) {
-		/* Diagnostic: display sizeof(Song) on 7-seg so we can see it.
-		 * Freezes with the size displayed — press power to restart. */
-		char buf[12];
-		intToString((int)sizeof(Song), buf);
-		freezeWithError(buf);
-ramError:
-		error = Error::INSUFFICIENT_RAM;
+	// Load the song from file — this is the heavy part (XML parse + sample loading)
+	// This synchronous path is used when playback is active (FreeRTOS) or in non-FreeRTOS builds.
+	SongLoadResult loadResult = loadSongFromFile(currentFileItem, currentDir.get(), !isPlaying, enteredText.get());
 
-someError:
-		display->displayError(error);
-		activeDeserializer->closeWriter();
-fail:
+	if (loadResult.error != Error::NONE) {
+		display->displayError(loadResult.error);
 		// If we already deleted the old song, make a new blank one. This will take us back to InstrumentClipView.
 		if (!currentSong) {
-			// If we're here, it's most likely because of a file error. On paper, a RAM error could be possible too.
 			setupBlankSong();
 			audioFileManager.deleteAnyTempRecordedSamplesFromMemory();
 		}
-
-		// Otherwise, stay here in this UI
 		performingLoad = false;
 		return;
-	}
-
-	terminate_set_context("TD6B"); /* Song constructor */
-	preLoadedSong = new (songMemory) Song();
-	terminate_set_context("TD6C"); /* setupUnpatched */
-	error = preLoadedSong->paramManager.setupUnpatched();
-	if (error != Error::NONE) {
-gotErrorAfterCreatingSong:
-		void* toDealloc = dynamic_cast<void*>(preLoadedSong);
-		preLoadedSong->~Song(); // Will also delete paramManager
-		delugeDealloc(toDealloc);
-		preLoadedSong = nullptr;
-		goto someError;
-	}
-
-	terminate_set_context("TD6D"); /* initParams */
-	GlobalEffectable::initParams(&preLoadedSong->paramManager);
-
-	AudioEngine::logAction("initialized new song");
-
-	terminate_set_context("TD6E"); /* readFromFile */
-	// Will return false if we ran out of RAM. This isn't currently detected for while loading ParamNodes, but chances
-	// are, after failing on one of those, it'd try to load something else and that would fail.
-	error = preLoadedSong->readFromFile(*activeDeserializer);
-	if (error != Error::NONE) {
-		goto gotErrorAfterCreatingSong;
-	}
-	AudioEngine::logAction("read new song from file");
-
-	FRESULT success = activeDeserializer->closeWriter();
-	if (success != FR_OK) {
-		display->displayPopup(deluge::l10n::get(deluge::l10n::String::STRING_FOR_ERROR_LOADING_SONG));
-		goto fail;
-	}
-
-	preLoadedSong->dirPath.set(&currentDir);
-
-	String currentFilenameWithoutExtension;
-	error = currentFileItem->getFilenameWithoutExtension(&currentFilenameWithoutExtension);
-	if (error != Error::NONE) {
-		goto gotErrorAfterCreatingSong;
-	}
-
-	error = audioFileManager.setupAlternateAudioFileDir(audioFileManager.alternateAudioFileLoadPath, currentDir.get(),
-	                                                    currentFilenameWithoutExtension);
-	if (error != Error::NONE) {
-		goto gotErrorAfterCreatingSong;
-	}
-
-	audioFileManager.thingBeginningLoading(ThingType::SONG);
-
-	// Search existing RAM for all samples, to lay a claim to any which will be needed for this new Song.
-	// Do this before loading any new Samples from file, in case we were in danger of discarding any from RAM that we
-	// might actually want
-	preLoadedSong->loadAllSamples(false);
-
-	// Load samples from files, just for currently playing Sounds (or if not playing, then all Sounds)
-	if (playbackHandler.isEitherClockActive()) {
-		preLoadedSong->loadCrucialSamplesOnly();
-	}
-	else {
-		preLoadedSong->loadAllSamples(true);
 	}
 
 	// Ensure all AudioFile Clusters needed for new song are loaded
 #ifdef USE_TASK_MANAGER
 	yieldWithTimeout([]() { return !(audioFileManager.loadingQueueHasAnyLowestPriorityElements()); }, 5);
 #else
-	while (audioFileManager.loadingQueueHasAnyLowestPriorityElements() && count < 1024) {
-		audioFileManager.loadAnyEnqueuedClusters();
-		routineForSD();
-		count++;
+	{
+		int32_t count = 0;
+		while (audioFileManager.loadingQueueHasAnyLowestPriorityElements() && count < 1024) {
+			audioFileManager.loadAnyEnqueuedClusters();
+			routineForSD();
+			count++;
+		}
 	}
 #endif
 
-	preLoadedSong->name.set(&enteredText);
-
 	Song* toDelete = currentSong;
 
-	if (playbackHandler.isEitherClockActive()) {
+	if (isPlaying) {
 
 		// If load button was already released while that loading was happening, arm for song-swap now
 		if (!Buttons::isButtonPressed(deluge::hid::button::LOAD)) {

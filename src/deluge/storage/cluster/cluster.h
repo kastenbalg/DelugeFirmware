@@ -22,6 +22,7 @@
 #include "memory/memory_allocator_interface.h"
 #include "memory/stealable.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 
 class Sample;
@@ -64,7 +65,7 @@ public:
 	Cluster::Type type;
 	uint32_t clusterIndex = 0;
 
-	int32_t numReasonsToBeLoaded = 0;
+	std::atomic<int32_t> numReasonsToBeLoaded{0};
 	int8_t numReasonsHeldBySampleRecorder = 0;
 	bool unloadable = false;
 	bool extraBytesAtStartConverted = false;

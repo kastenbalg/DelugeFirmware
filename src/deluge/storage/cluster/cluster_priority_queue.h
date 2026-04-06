@@ -74,6 +74,15 @@ public:
 		return !c.empty() && c.rbegin()->first == std::numeric_limits<uint32_t>::max();
 	}
 
+	/* Clear all entries from the queue. No reason cleanup needed — the loading
+	 * queue doesn't hold extra reasons on clusters (those are only added when
+	 * feedClusterReadsToISR picks them up and submits to the ISR). */
+	void flush() {
+		clusterQueueEnterCritical();
+		c.clear();
+		clusterQueueExitCritical();
+	}
+
 	bool erase(const Cluster* cluster) {
 		clusterQueueEnterCritical();
 		for (auto& val : this->c | std::views::values) {

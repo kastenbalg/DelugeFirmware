@@ -1766,7 +1766,7 @@ void Sample::numReasonsDecreasedToZero(char const* errorCode) {
 
 			Cluster* cluster = clusters.getElement(c)->cluster;
 			if (cluster) {
-				D_PRINT("cluster->numReasonsToBeLoaded[%d]", cluster->numReasonsToBeLoaded);
+				D_PRINT("cluster->numReasonsToBeLoaded[%d]", cluster->numReasonsToBeLoaded.load());
 
 #ifndef USE_FREERTOS
 				if (cluster == audioFileManager.clusterBeingLoaded) {

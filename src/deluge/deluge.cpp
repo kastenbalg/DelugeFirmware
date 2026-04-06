@@ -61,8 +61,11 @@
 #include "playback/mode/session.h"
 #include "processing/engines/audio_engine.h"
 #include "processing/engines/cv_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "scheduler_api.h"
 #include "storage/audio/audio_file_manager.h"
+#include "storage/storage_task.h"
+extern "C" bool sdAsyncFastQueueEmpty(void);
 #include "storage/flash_storage.h"
 #include "storage/smsysex.h"
 #include "storage/storage_manager.h"
@@ -1151,7 +1154,7 @@ extern "C" void sdCardEjected(void) {
 	audioFileManager.setCardEjected();
 }
 
-extern "C" void setNumeric(char* text) {
+extern "C" void setNumeric(const char* text) {
 	display->setText(text);
 }
 
@@ -1173,7 +1176,36 @@ void deleteOldSongBeforeLoadingNew() {
 	currentSong = nullptr;
 
 	toDelete->stopAllAuditioning();
-	AudioEngine::killAllVoices(true);
+
+	/* Use synchronous kill-all: enqueues KILL_ALL to the audio task's voice
+	 * event queue and blocks until the audio task has processed it. This
+	 * guarantees the audio task is not mid-render when we proceed. */
+	voiceEventKillAllSync();
+
+	/* Clear the sounds vector BEFORE destroying the Song. The audio task
+	 * iterates this vector every cycle (cleanupDeletedVoices, killAllVoices).
+	 * We must clear it while the audio task is between render cycles (which
+	 * voiceEventKillAllSync guarantees — the audio task just finished
+	 * processing our KILL_ALL and is now blocked waiting for the next DMA). */
+	AudioEngine::sounds.clear();
+
+	/* Drain the async cluster pipeline before destroying the Song.
+	 * Clusters in-flight have cluster->sample pointers that would dangle.
+	 *
+	 * 1. Flush the loading queue — prevents sequencer from feeding new reads
+	 * 2. Wait until clusterReadsCompleted == clusterReadsSubmitted — this
+	 *    means every cluster submitted to the ISR has been DMA'd, post-
+	 *    processed by the sequencer, and had its temporary reason released.
+	 *
+	 * This is deterministic — no timing assumptions about buffer sizes. */
+	audioFileManager.loadingQueue.flush();
+	{
+		int32_t waitCycles = 0;
+		while (clusterReadsCompleted != clusterReadsSubmitted && waitCycles < 500) {
+			vTaskDelay(pdMS_TO_TICKS(3));
+			waitCycles++;
+		}
+	}
 
 	view.activeModControllableModelStack.modControllable = nullptr;
 	view.activeModControllableModelStack.setTimelineCounter(nullptr);

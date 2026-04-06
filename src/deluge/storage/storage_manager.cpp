@@ -720,7 +720,6 @@ Error StorageManager::openXMLFile(FilePointer* filePointer, XMLDeserializer& rea
 
 	AudioEngine::logAction("openXMLFile");
 	reader.reset();
-	// Prep to read first Cluster shortly
 	openFilePointer(filePointer, reader);
 	Error err = reader.openXMLFile(filePointer, firstTagName, altTagName, ignoreIncorrectFirmware);
 	activeDeserializer = &reader;

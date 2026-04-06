@@ -252,13 +252,23 @@ extern void fault_handler_print_freeze_pointers(uint32_t addrSYSLR, uint32_t add
 	__enable_irq();
 }
 
+/* Last diagnostic marker set by storage task / song loader / sequencer.
+ * Displayed on fault so we know where execution was before the crash. */
+volatile const char* g_lastDiagnostic = 0;
+
 extern void handle_cpu_fault(uint32_t addrSYSLR, uint32_t addrSYSSP, uint32_t addrUSRLR, uint32_t addrUSRSP) {
+	__disable_irq(); /* Prevent ISRs from overwriting the display */
+
 	printPointers(addrSYSLR, addrSYSSP, addrUSRLR, addrUSRSP, true);
 	clearTxBuffer();
 
-	/* Display "FAULT" on 7-seg so the user knows it's a CPU fault, not a silent hang */
 	extern void setNumeric(const char* text);
-	setNumeric("HALT");
+	if (g_lastDiagnostic) {
+		setNumeric((const char*)g_lastDiagnostic);
+	}
+	else {
+		setNumeric("HALT");
+	}
 
 	while (1) {
 		__asm__("nop");

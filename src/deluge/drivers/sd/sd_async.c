@@ -77,6 +77,12 @@ static inline bool fastQueueEmpty(void) {
 	return sFastQueue.head == sFastQueue.tail;
 }
 
+/* Exposed for cluster pipeline flushing — returns true when the ISR
+ * has no pending fast-path (cluster read) requests. */
+bool sdAsyncFastQueueEmpty(void) {
+	return fastQueueEmpty();
+}
+
 static inline bool slowQueueEmpty(void) {
 	return sSlowQueue.head == sSlowQueue.tail;
 }

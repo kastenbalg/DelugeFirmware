@@ -256,6 +256,9 @@ static void processVoiceEvent(const VoiceEvent& event) {
 
 	case VoiceEventType::KILL_ALL:
 		AudioEngine::killAllVoices();
+		if (event.killAll.waitingTask != nullptr) {
+			xTaskNotifyGive(event.killAll.waitingTask);
+		}
 		break;
 
 	case VoiceEventType::EXPRESSION:

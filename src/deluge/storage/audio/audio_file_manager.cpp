@@ -30,6 +30,7 @@
 #include "model/song/song.h"
 #include "playback/playback_handler.h"
 #include "processing/engines/audio_engine.h"
+#include "processing/engines/voice_event_queue.h"
 #include "storage/cluster/cluster.h"
 #include "storage/storage_manager.h"
 #include "storage/wave_table/wave_table.h"
@@ -70,9 +71,16 @@ void fatfs_unlock_volume(void);
 
 AudioFileManager audioFileManager{};
 
+#ifdef USE_FREERTOS
+static rtos_mutex_storage_t sAfmMutexStorage;
+#endif
+
 AudioFileManager::AudioFileManager() {
 	highestUsedAudioRecordingNumber.fill(-1);
 	highestUsedAudioRecordingNumberNeedsReChecking.set();
+#ifdef USE_FREERTOS
+	afmMutex = rtos_mutex_create(&sAfmMutexStorage);
+#endif
 }
 
 void AudioFileManager::firstCardRead() {
@@ -131,7 +139,12 @@ void AudioFileManager::cardReinserted() {
 
 clusterSizeChangedButItsOk:
 		D_PRINTLN("cluster size changed, and smaller than original so it's ok");
+#ifdef USE_FREERTOS
+		voiceEventKillAllSync();
+		AudioEngine::sounds.clear();
+#else
 		AudioEngine::killAllVoices(); // Will also stop synth voices - too bad.
+#endif
 
 		for (int32_t e = 0; e < audioFiles.getNumElements(); e++) {
 			AudioFile* thisAudioFile = (AudioFile*)audioFiles.getElement(e);
@@ -1439,26 +1452,26 @@ performActionsAndGetOut:
 }
 
 void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* errorCode, bool deletingSong) {
-	/* Decrement and capture the resulting count atomically w.r.t. other tasks.
-	 * We must NOT call mutex-acquiring functions (dealloc, putStealableInQueue)
-	 * inside the critical section — the scheduler is suspended and mutex waits
-	 * would deadlock. So we decide what to do inside, exit, then act. */
+	/* Atomically decrement the refcount. The old value tells us what to do:
+	 * - old == 1 → now 0, we won the zero-transition → cleanup
+	 * - old > 1 → still referenced, nothing to do
+	 * - old <= 0 → bug, negative refcount */
 	enum class Action { none, deleteCluster, fileAway, negativeError };
 	Action action = Action::none;
 	bool recorderBug = false;
 
-#ifdef USE_FREERTOS
-	taskENTER_CRITICAL();
-#endif
-	cluster.numReasonsToBeLoaded--;
+	int32_t oldVal = cluster.numReasonsToBeLoaded.fetch_sub(1, std::memory_order_acq_rel);
 
 #ifndef USE_FREERTOS
-	if (&cluster == clusterBeingLoaded && cluster.numReasonsToBeLoaded < minNumReasonsForClusterBeingLoaded) {
+	if (&cluster == clusterBeingLoaded && (oldVal - 1) < minNumReasonsForClusterBeingLoaded) {
 		FREEZE_WITH_ERROR("E041"); // Sven got this!
 	}
 #endif
 
-	if (cluster.numReasonsToBeLoaded == 0) {
+	if (oldVal == 1) {
+		// Was 1, now 0 — we won the zero-transition.
+		// Lock the mutex to safely access loadingQueue and stealable queues.
+		Lock lock(*this);
 		if (ALPHA_OR_BETA_VERSION && cluster.numReasonsHeldBySampleRecorder) {
 			recorderBug = true;
 		}
@@ -1470,12 +1483,9 @@ void AudioFileManager::removeReasonFromCluster(Cluster& cluster, char const* err
 			action = Action::fileAway;
 		}
 	}
-	else if (cluster.numReasonsToBeLoaded < 0) {
+	else if (oldVal <= 0) {
 		action = Action::negativeError;
 	}
-#ifdef USE_FREERTOS
-	taskEXIT_CRITICAL();
-#endif
 
 	/* Now act outside the critical section where mutex acquisition is safe */
 	if (recorderBug) {

@@ -1390,7 +1390,16 @@ void PlaybackHandler::doSongSwap(bool preservePlayPosition) {
 	}
 
 	// Swap stuff over
+#ifdef USE_FREERTOS
+	/* Synchronous kill: enqueue KILL_ALL to the audio task and block until
+	 * it finishes. This guarantees the audio task is between render cycles.
+	 * Do NOT clear AudioEngine::sounds here — the new song's Sounds were
+	 * already registered during construction. The old song's Sounds will
+	 * remove themselves when the old song is destroyed by the storage task. */
+	voiceEventKillAllSync();
+#else
 	AudioEngine::killAllVoices(true);
+#endif
 	midiFollow.clearStoredClips(); // need to clear clip pointers stored for previous song
 	currentSong = preLoadedSong;
 	AudioEngine::mustUpdateReverbParamsBeforeNextRender = true;

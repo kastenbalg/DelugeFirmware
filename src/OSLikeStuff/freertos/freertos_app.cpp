@@ -20,10 +20,9 @@
  *
  * Phase 6b architecture:
  * - Audio task at FreeRTOS priority 7 — pure DSP, drains voice event queue
- * - Cluster loader at priority 7 (same as audio) — uses SDHI DMA (different
- *   hardware from SSI DMA), sleeps during transfers, runs when audio sleeps
  * - Sequencer task at priority 6 — tick advancement, event scheduling, UI graphics
- * - App task at FreeRTOS priority 3 — runs cooperative scheduler for file ops
+ * - App task at FreeRTOS priority 3 — runs cooperative scheduler, UI
+ * - Storage task at priority 2 — song/preset load/save, XML parsing
  * - IRQ handler bridges to existing GIC dispatch via vApplicationFPUSafeIRQHandler
  */
 
@@ -32,6 +31,7 @@
 #include "FreeRTOS.h"
 #include "processing/engines/audio_engine.h"
 #include "semphr.h"
+#include "storage/storage_task.h"
 #include "task.h"
 
 /* --------------------------------------------------------------------------
@@ -65,6 +65,12 @@ static StackType_t sAudioTaskStack[4096];
 /* Sequencer task: tick advancement, event scheduling, MIDI/CV I/O, UI. 16KB stack. */
 static StaticTask_t sSequencerTaskTCB;
 static StackType_t sSequencerTaskStack[4096];
+
+/* Storage task: song/preset load/save, XML parsing, sample file indexing. 64KB stack.
+ * Needs extra room for: StorageCommand (~780B local), deep FatFS/XML parse call chain,
+ * and f_read's internal buffer operations. */
+static StaticTask_t sStorageTaskTCB;
+static StackType_t sStorageTaskStack[16384];
 
 /* Global handles for task management */
 TaskHandle_t audioTaskHandle = nullptr;
@@ -222,6 +228,13 @@ static void clusterReadCompletionCallback(int32_t result, void* userData) {
  * Feed pending cluster reads from the loading queue to the ISR fast queue.
  * Called from the sequencer task each cycle (~1.45ms).
  */
+/* Counters for deterministic cluster pipeline drain.
+ * Submitted: incremented when feedClusterReadsToISR hands a cluster to the ISR.
+ * Completed: incremented when drainClusterCompletions finishes post-processing.
+ * When submitted == completed, the pipeline is fully drained. */
+volatile uint32_t clusterReadsSubmitted = 0;
+volatile uint32_t clusterReadsCompleted = 0;
+
 static void feedClusterReadsToISR() {
 	if (!sdAsyncIsActive()) {
 		return;
@@ -267,6 +280,10 @@ static void feedClusterReadsToISR() {
 		bool enqueued = sdAsyncReadCluster(startSector, (uint8_t*)cluster->data, numSectors,
 		                                   clusterReadCompletionCallback, (void*)cluster);
 
+		if (enqueued) {
+			clusterReadsSubmitted++;
+		}
+
 		if (!enqueued) {
 			/* Fast queue full — put it back and try next cycle */
 			audioFileManager.removeReasonFromCluster(*cluster, "E033");
@@ -278,7 +295,8 @@ static void feedClusterReadsToISR() {
 
 /*
  * Drain the ISR completion ring buffer and post-process completed clusters.
- * Called from the sequencer task each cycle (~1.45ms).
+ * Called from the sequencer task each cycle. Must only be called from the
+ * sequencer — the completion ring is SPSC (single consumer).
  */
 static void drainClusterCompletions() {
 	SdClusterCompletion comp;
@@ -291,6 +309,7 @@ static void drainClusterCompletions() {
 			/* Read error — release the loading reason */
 			audioFileManager.removeReasonFromCluster(*cluster, "E033");
 		}
+		clusterReadsCompleted++;
 	}
 }
 
@@ -315,11 +334,11 @@ static void appTaskFunction(void* pvParameters) {
 
 extern "C" {
 int32_t uartGetTxBufferSpace(int32_t item);
-void setNumeric(const char* text);
 }
 
 class Song;
 extern Song* currentSong;
+extern Song* preLoadedSong;
 
 static void graphicsUpdate() {
 	if (currentSong == nullptr) {
@@ -439,6 +458,43 @@ static void sequencerRoutine() {
 	playbackHandler.publishTempoState();
 }
 
+/* --------------------------------------------------------------------------
+ * Drain sequencer events from the storage task (lock-free SPSC queue).
+ * Called each sequencer cycle. One atomic load when empty — negligible cost.
+ * -------------------------------------------------------------------------- */
+static void handleSongReady(Song* newSong, void* requestingTask) {
+	Song* old = currentSong;
+
+	playbackHandler.doSongSwap();
+
+	audioFileManager.thingFinishedLoading();
+
+	// Hand old song to storage task for teardown via task notification.
+	xTaskNotify((TaskHandle_t)storageTaskHandle, reinterpret_cast<uint32_t>(old), eSetValueWithOverwrite);
+
+	// Wake the app task so it can finalize the UI.
+	if (requestingTask) {
+		xTaskNotifyGive((TaskHandle_t)requestingTask);
+	}
+}
+
+static void drainSequencerEvents() {
+	SequencerEvent ev;
+	while (g_sequencerEventQueue.pop(ev)) {
+		switch (ev.type) {
+		case SequencerEventType::SONG_READY:
+			handleSongReady(ev.songReady.song, ev.songReady.requestingTask);
+			break;
+		case SequencerEventType::TEARDOWN_DONE:
+			// Old song destruction complete. Could notify UI here.
+			break;
+		case SequencerEventType::LOAD_ERROR:
+			// TODO: Notify UI of load failure
+			break;
+		}
+	}
+}
+
 extern volatile uint32_t allocMutexContentionCount;
 
 static void sequencerTaskFunction(void* pvParameters) {
@@ -458,6 +514,10 @@ static void sequencerTaskFunction(void* pvParameters) {
 		/* Post-process any clusters the ISR has finished reading since last cycle.
 		 * This does format conversion, boundary stitching, and marks them loaded. */
 		drainClusterCompletions();
+
+		/* Check for events from the storage task (song ready, errors, etc.).
+		 * Lock-free SPSC — one atomic load when empty, negligible cost. */
+		drainSequencerEvents();
 
 		/* Submit pending cluster reads from the loading queue to the ISR.
 		 * The ISR processes them autonomously between sequencer cycles. */
@@ -492,14 +552,21 @@ static void sequencerTaskFunction(void* pvParameters) {
  * Entry point: create tasks and start the FreeRTOS scheduler
  * -------------------------------------------------------------------------- */
 extern "C" void startFreeRTOS(void (*schedulerEntry)(void)) {
-	/* Initialize the voice event queue and async SD layer before creating tasks */
+	/* Initialize queues and async SD layer before creating tasks */
 	voiceEventQueueInit();
+	storageTaskInit();
 	sdAsyncInit();
 
 	/* App task at priority 3 — all non-audio tasks run cooperatively here */
 	xTaskCreateStatic(appTaskFunction, "App", 8192, (void*)schedulerEntry,
 	                  3, /* Same priority for all non-audio, no time-slicing */
 	                  sAppTaskStack, &sAppTaskTCB);
+
+	/* Storage task at priority 2 — song/preset load/save, XML parsing.
+	 * Below app task so UI always stays responsive during loading. */
+	storageTaskHandle =
+	    xTaskCreateStatic(storageTaskFunction, "Storage", 16384, NULL, 2, /* Below app (3), never preempts UI */
+	                      sStorageTaskStack, &sStorageTaskTCB);
 
 	/* Sequencer task at priority 6 — tick advancement, events, MIDI/CV I/O, UI graphics.
 	 * Also handles cluster loading: feeds the ISR from the loading queue and

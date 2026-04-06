@@ -212,7 +212,12 @@ struct VoiceEvent {
 			TaskHandle_t waitingTask; // non-null → notify this task when done
 		} killSound;
 
-		// KILL_ALL / PHASE_RECALC: no additional data needed
+		// KILL_ALL (synchronous variant carries a task to notify on completion)
+		struct {
+			TaskHandle_t waitingTask; // non-null → notify this task when done
+		} killAll;
+
+		// PHASE_RECALC: no additional data needed
 	};
 };
 
@@ -395,11 +400,21 @@ inline void voiceEventKillSoundSync(Sound* sound) {
 	ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // block until audio task signals
 }
 
-inline bool voiceEventKillAll() {
+inline bool voiceEventKillAll(TaskHandle_t waitingTask = nullptr) {
 	VoiceEvent ev{};
 	ev.type = VoiceEventType::KILL_ALL;
 	ev.sound = nullptr;
+	ev.killAll.waitingTask = waitingTask;
 	return voiceEventEnqueue(ev);
+}
+
+/// Synchronous kill-all: enqueues KILL_ALL and blocks until audio task completes.
+/// Must NOT be called from the audio task itself.
+inline void voiceEventKillAllSync() {
+	TaskHandle_t me = xTaskGetCurrentTaskHandle();
+	ulTaskNotifyTake(pdTRUE, 0); // clear any pending notification
+	voiceEventKillAll(me);
+	ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // block until audio task signals
 }
 
 inline bool voiceEventExpression(Sound* sound, int32_t noteCodePostArp, int32_t fromMIDIChannel, uint8_t dimension,
