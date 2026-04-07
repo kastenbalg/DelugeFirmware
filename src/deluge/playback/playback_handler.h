@@ -19,7 +19,6 @@
 
 #include "definitions_cxx.hpp"
 #include "util/d_string.h"
-#include <atomic>
 #include <cstdint>
 
 enum class RecordingMode {
@@ -173,19 +172,6 @@ public:
 	uint64_t getTimePerInternalTickBig();
 	float getTimePerInternalTickFloat();
 	uint32_t getTimePerInternalTickInverse(bool getStickyValue = false);
-
-	/// Published tempo scalars for lock-free reading by the audio task.
-	/// The sequencer task updates these after tempo changes; effects read
-	/// them during rendering without any mutex.
-	std::atomic<uint32_t> publishedTimePerInternalTickInverse{0};
-	std::atomic<uint32_t> publishedStickyTimePerInternalTickInverse{0};
-
-	/// Call from the sequencer task after any tempo change to publish
-	/// the latest values for the audio task to read.
-	void publishTempoState() {
-		publishedTimePerInternalTickInverse.store(getTimePerInternalTickInverse(false), std::memory_order_relaxed);
-		publishedStickyTimePerInternalTickInverse.store(getTimePerInternalTickInverse(true), std::memory_order_relaxed);
-	}
 
 	void tapTempoButtonPress(bool useNormalTapTempoBehaviour);
 	void doTriggerClockOutTick();

@@ -380,7 +380,6 @@ static void sequencerRoutine() {
 	playbackHandler.routine();
 
 	if (!playbackHandler.isEitherClockActive()) {
-		playbackHandler.publishTempoState();
 		return;
 	}
 
@@ -454,8 +453,6 @@ static void sequencerRoutine() {
 		}
 		playbackHandler.scheduleMIDIClockOutTick();
 	}
-
-	playbackHandler.publishTempoState();
 }
 
 /* --------------------------------------------------------------------------
