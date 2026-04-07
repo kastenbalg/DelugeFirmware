@@ -555,12 +555,14 @@ void MidiEngine::sendUsbMidi(MIDIMessage message, int32_t filter) {
 			}
 			int32_t maxPort = connectedDevice->maxPortConnected;
 			for (int32_t p = 0; p <= maxPort; p++) {
+				// Snapshot the cable pointer to avoid TOCTOU race with USB hotplug —
+				// detach can null cable[p] from ISR context between check and dereference.
+				MIDICableUSB* cable = connectedDevice->cable[p];
 				// if device exists, it's not port 3 (for sysex)
-				if (connectedDevice->cable[p]
-				    && connectedDevice->cable[p] != &MIDIDeviceManager::upstreamUSBMIDICable3) {
+				if (cable && cable != &MIDIDeviceManager::upstreamUSBMIDICable3) {
 					// if it's a clock (or sysex technically but we don't send that to this function)
 					// or if it's a message that this channel wants
-					if (connectedDevice->cable[p]->wantsToOutputMIDIOnChannel(message, filter)) {
+					if (cable->wantsToOutputMIDIOnChannel(message, filter)) {
 
 						// Or with the port to add the cable number to the full message. This
 						// is a bit hacky but it works
