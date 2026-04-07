@@ -25,6 +25,7 @@
 #include "memory/object_pool.h"
 #include "model/output.h"
 #include "util/containers.h"
+#include <atomic>
 #include <cstdint>
 #include <memory>
 
@@ -191,7 +192,10 @@ extern bool micPluggedIn;
 extern bool lineInPluggedIn;
 extern bool renderInStereo;
 extern uint32_t audioSampleTimer;
-extern bool mustUpdateReverbParamsBeforeNextRender;
+// Set by UI/menu tasks, read+cleared by audio task. Atomic to avoid data race.
+// NOTE: updateReverbParams() still iterates currentSong->firstOutput on the audio task —
+// that's a Song-level thread-safety issue, not solved here.
+extern std::atomic<bool> mustUpdateReverbParamsBeforeNextRender;
 extern bool bypassCulling;
 extern uint32_t i2sTXBufferPos;
 extern uint32_t i2sRXBufferPos;
@@ -213,6 +217,7 @@ extern deluge::fast_vector<Sound*> sounds;
 extern deluge::dsp::Reverb reverb;
 extern uint32_t nextVoiceState;
 extern SoundDrum* sampleForPreview;
+extern ParamManagerForTimeline* paramManagerForSamplePreview;
 extern int32_t reverbSidechainVolume;
 extern int32_t reverbSidechainShape;
 extern int32_t reverbPan;

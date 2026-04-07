@@ -148,7 +148,7 @@ int32_t reverbPan = 0;
 int32_t reverbSidechainVolumeInEffect; // Active right now - possibly overridden by the sound with the most reverb
 int32_t reverbSidechainShapeInEffect;
 
-bool mustUpdateReverbParamsBeforeNextRender = false;
+std::atomic<bool> mustUpdateReverbParamsBeforeNextRender{false};
 
 int32_t sideChainHitPending = false;
 
@@ -1407,21 +1407,35 @@ void previewSample(String* path, FilePointer* filePointer, bool shouldActuallySo
 	}
 
 	if (shouldActuallySound) {
+#ifdef USE_FREERTOS
+		voiceEventPreviewNoteOn();
+#else
 		char modelStackMemory[MODEL_STACK_MAX_SIZE];
 		ModelStackWithThreeMainThings* modelStack = setupModelStackWithThreeMainThingsButNoNoteRow(
 		    modelStackMemory, currentSong, sampleForPreview, NULL, paramManagerForSamplePreview);
 		sampleForPreview->Sound::noteOn(modelStack, &sampleForPreview->arpeggiator, kNoteForDrum, zeroMPEValues);
-		bypassCulling = true; // Needed - Dec 2021. I think it's during SampleBrowser::selectEncoderAction() that we
-		                      // may have gone a while without an audio routine call.
+		bypassCulling = true;
+#endif
 	}
 }
 
 void stopAnyPreviewing() {
+#ifdef USE_FREERTOS
+	// Synchronously kill preview voices on the audio task, then clean up the holder
+	// on this task. Must be sync to avoid racing with the render cycle and to ensure
+	// cluster reasons are fully released before we drop the Sample reason.
+	voiceEventKillSoundSync(sampleForPreview);
+	if (sampleForPreview->sources[0].ranges.getNumElements()) {
+		MultisampleRange* range = (MultisampleRange*)sampleForPreview->sources[0].ranges.getElement(0);
+		range->sampleHolder.setAudioFile(nullptr);
+	}
+#else
 	sampleForPreview->killAllVoices();
 	if (sampleForPreview->sources[0].ranges.getNumElements()) {
 		MultisampleRange* range = (MultisampleRange*)sampleForPreview->sources[0].ranges.getElement(0);
 		range->sampleHolder.setAudioFile(nullptr);
 	}
+#endif
 }
 
 void getReverbParamsFromSong(Song* song) {

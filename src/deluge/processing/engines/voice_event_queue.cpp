@@ -18,6 +18,7 @@
 #ifdef USE_FREERTOS
 
 #include "processing/engines/voice_event_queue.h"
+#include "extern.h"
 #include "model/clip/instrument_clip.h"
 #include "model/drum/drum.h"
 #include "model/instrument/kit.h"
@@ -273,6 +274,16 @@ static void processVoiceEvent(const VoiceEvent& event) {
 	case VoiceEventType::PHASE_RECALC:
 		/* TODO: Call sound->recalculateAllVoicePhaseIncrements. */
 		break;
+
+	case VoiceEventType::PREVIEW_NOTE_ON: {
+		SoundDrum* preview = AudioEngine::sampleForPreview;
+		char modelStackMemory[MODEL_STACK_MAX_SIZE];
+		ModelStackWithThreeMainThings* modelStack = setupModelStackWithThreeMainThingsButNoNoteRow(
+		    modelStackMemory, currentSong, preview, NULL, AudioEngine::paramManagerForSamplePreview);
+		preview->Sound::noteOn(modelStack, &preview->arpeggiator, kNoteForDrum, zeroMPEValues);
+		AudioEngine::bypassCulling = true;
+		break;
+	}
 	}
 }
 

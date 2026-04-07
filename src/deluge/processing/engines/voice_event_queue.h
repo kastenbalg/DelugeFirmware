@@ -100,6 +100,9 @@ enum class VoiceEventType : uint8_t {
 	EXPRESSION,   // MPE expression event (X/Y/Z per voice)
 	PARAM_CHANGE, // Patched parameter value changed
 	PHASE_RECALC, // Recalculate phase increments (pitch change)
+
+	// Sample preview events (UI task → audio task)
+	PREVIEW_NOTE_ON, // Trigger noteOn on sampleForPreview
 };
 
 struct VoiceEvent {
@@ -450,6 +453,15 @@ inline bool voiceEventPhaseRecalc(Sound* sound) {
 	VoiceEvent ev{};
 	ev.type = VoiceEventType::PHASE_RECALC;
 	ev.sound = sound;
+	return voiceEventEnqueue(ev);
+}
+
+/* ---- Sample preview event enqueue helpers ---- */
+
+inline bool voiceEventPreviewNoteOn() {
+	VoiceEvent ev{};
+	ev.type = VoiceEventType::PREVIEW_NOTE_ON;
+	ev.sound = nullptr;
 	return voiceEventEnqueue(ev);
 }
 
