@@ -76,6 +76,7 @@ public:
 
 	char firstThreeBytesPreDataConversion[3];
 	bool loaded = false;
+	bool prefetchOnly = false; ///< If true, post-load releases the creation reason (cluster becomes stealable)
 
 	// MUST BE THE LAST TWO MEMBERS
 	alignas(4) char dummy[CACHE_LINE_SIZE];

@@ -1311,6 +1311,16 @@ copy7ToMe:
 
 	removeReasonFromCluster(cluster, "E034");
 
+	// Prefetch-created clusters: release the creation reason now that loading is done.
+	// This makes the cluster stealable (0 reasons) while SampleCluster::cluster still
+	// points to it. When a voice later needs it, getCluster() finds it loaded and adds
+	// a reason. If memory pressure steals it first, SampleCluster::cluster is set to null
+	// and the voice will re-create it on demand.
+	if (cluster.prefetchOnly) {
+		cluster.prefetchOnly = false;
+		removeReasonFromCluster(cluster, "E035");
+	}
+
 	return true;
 }
 

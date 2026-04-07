@@ -94,6 +94,9 @@ static int32_t prefetchClustersFromIndex(Sample* sample, int32_t startClusterInd
 
 		if (sc->cluster == nullptr) {
 			sc->getCluster(sample, idx, CLUSTER_ENQUEUE, 0);
+			if (sc->cluster != nullptr) {
+				sc->cluster->prefetchOnly = true;
+			}
 			clustersEnqueued++;
 		}
 	}
@@ -164,8 +167,12 @@ static int32_t prefetchClustersForSample(Sample* sample, int32_t startByte, int3
 		/* Only enqueue if not already loaded */
 		if (sc->cluster == nullptr) {
 			/* getCluster with CLUSTER_ENQUEUE creates the Cluster object and
-			 * adds it to the loading queue. */
+			 * adds it to the loading queue. Mark as prefetch-only so the
+			 * creation reason is released after loading. */
 			sc->getCluster(sample, clusterIndex, CLUSTER_ENQUEUE, priorityRating);
+			if (sc->cluster != nullptr) {
+				sc->cluster->prefetchOnly = true;
+			}
 			clustersEnqueued++;
 		}
 
