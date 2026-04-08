@@ -39,6 +39,7 @@
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"
+#include "model/clip/instrument_clip_factory.h"
 #include "model/consequence/consequence_clip_existence.h"
 #include "model/instrument/cv_instrument.h"
 #include "model/instrument/midi_instrument.h"
@@ -379,8 +380,7 @@ bool Song::ensureAtLeastOneSessionClip() {
 		return false;
 	}
 
-	void* memory = allocExternal(sizeof(InstrumentClip));
-	InstrumentClip* firstClip = new (memory) InstrumentClip(this);
+	InstrumentClip* firstClip = createInstrumentClip(OutputType::SYNTH, this);
 
 	sessionClips.insertClipAtIndex(firstClip, 0);
 
@@ -2050,6 +2050,10 @@ loadOutput:
 		clip->gotInstanceYet = false;
 	}
 
+	// Upgrade base InstrumentClip instances from old song files to KitClip/MelodicClip
+	// before matching clips to their outputs.
+	upgradeInstrumentClipsPostLoad();
+
 	char modelStackMemory[MODEL_STACK_MAX_SIZE];
 	ModelStack* modelStack = setupModelStackWithSong(modelStackMemory, this);
 
@@ -2264,7 +2268,6 @@ Error Song::readClipsFromFile(Deserializer& reader, ClipArray* clipArray) {
 		ClipType clipType;
 
 		if (!strcmp(tagName, "track") || !strcmp(tagName, "instrumentClip")) {
-			allocationSize = sizeof(InstrumentClip);
 			clipType = ClipType::INSTRUMENT;
 
 readClip:
@@ -2272,23 +2275,26 @@ readClip:
 				return Error::INSUFFICIENT_RAM;
 			}
 
-			void* memory = allocExternal(allocationSize);
-			if (!memory) {
-				return Error::INSUFFICIENT_RAM;
-			}
-
 			Clip* newClip;
 			if (clipType == ClipType::INSTRUMENT) {
-				newClip = new (memory) InstrumentClip();
+				newClip = createInstrumentClipForLoading();
+				if (!newClip) {
+					return Error::INSUFFICIENT_RAM;
+				}
 			}
 			else {
+				void* memory = allocExternal(sizeof(AudioClip));
+				if (!memory) {
+					return Error::INSUFFICIENT_RAM;
+				}
 				newClip = new (memory) AudioClip();
 			}
 
 			Error error = newClip->readFromFile(reader, this);
 			if (error != Error::NONE) {
+				void* toDealloc = dynamic_cast<void*>(newClip);
 				newClip->~Clip();
-				delugeDealloc(memory);
+				delugeDealloc(toDealloc);
 				return error;
 			}
 
@@ -2297,8 +2303,30 @@ readClip:
 			reader.exitTag(nullptr, true); // exit value object
 			reader.match('}');             // exit box.
 		}
+		else if (!strcmp(tagName, "kitClip")) {
+			// New tag written by KitClip::getXMLTag(). Create directly as KitClip.
+			if (!clipArray->ensureEnoughSpaceAllocated(1)) {
+				return Error::INSUFFICIENT_RAM;
+			}
+
+			InstrumentClip* newClip = createInstrumentClip(OutputType::KIT);
+			if (!newClip) {
+				return Error::INSUFFICIENT_RAM;
+			}
+
+			Error error = newClip->readFromFile(reader, this);
+			if (error != Error::NONE) {
+				void* toDealloc = dynamic_cast<void*>(newClip);
+				newClip->~InstrumentClip();
+				delugeDealloc(toDealloc);
+				return error;
+			}
+
+			clipArray->insertClipAtIndex(newClip, clipArray->getNumElements());
+			reader.exitTag(nullptr, true);
+			reader.match('}');
+		}
 		else if (!strcmp(tagName, "audioClip")) {
-			allocationSize = sizeof(AudioClip);
 			clipType = ClipType::AUDIO;
 
 			goto readClip;
@@ -5474,6 +5502,61 @@ int32_t Song::countAudioClips() const {
 	return i;
 }
 
+void Song::upgradeInstrumentClipsPostLoad() {
+	// Upgrade base InstrumentClip instances (from old song files) to KitClip or MelodicClip
+	// based on the outputTypeWhileLoading that was set during readFromFile.
+	auto upgradeArray = [this](ClipArray& clipArray) {
+		for (int32_t i = 0; i < clipArray.getNumElements(); i++) {
+			Clip* clip = clipArray.getClipAtIndex(i);
+			if (clip->type != ClipType::INSTRUMENT) {
+				continue;
+			}
+
+			InstrumentClip* oldClip = static_cast<InstrumentClip*>(clip);
+			if (oldClip->isConcreteSubclass()) {
+				continue; // Already a KitClip or MelodicClip (e.g. from "kitClip" tag)
+			}
+
+			// Determine the right subclass from outputTypeWhileLoading
+			OutputType targetType = oldClip->outputTypeWhileLoading;
+
+			InstrumentClip* newClip = createInstrumentClip(targetType);
+			if (!newClip) {
+				continue; // Allocation failed — keep as base InstrumentClip (fallback)
+			}
+
+			newClip->stealStateFrom(oldClip);
+
+			// Replace in the array
+			clipArray.setPointerAtIndex(newClip, i);
+
+			// Update song-level references
+			if (oldClip == getSyncScalingClip()) {
+				syncScalingClip = newClip;
+			}
+			if (oldClip == currentClip) {
+				currentClip = newClip;
+			}
+			// After stealStateFrom, newClip owns the output pointer (oldClip->output is nullptr).
+			// If oldClip was the active clip on the output, update it to newClip.
+			if (newClip->output && newClip->output->getActiveClip() == oldClip) {
+				// Use a temporary modelStack to call setActiveClip properly
+				char msMemory[MODEL_STACK_MAX_SIZE];
+				ModelStackWithTimelineCounter* ms = setupModelStackWithTimelineCounter(msMemory, this, newClip);
+				newClip->output->setActiveClip(ms, PgmChangeSend::NEVER);
+			}
+
+			// Destroy old clip (output has been stolen, so destructor is lightweight)
+			void* toDealloc = dynamic_cast<void*>(oldClip);
+			oldClip->~InstrumentClip();
+			delugeDealloc(toDealloc);
+		}
+	};
+
+	upgradeArray(sessionClips);
+	upgradeArray(arrangementOnlyClips);
+}
+
 void Song::cullAudioClipVoice() {
 	AudioClip* bestClip = nullptr;
 	uint64_t lowestImmunity = 0xFFFFFFFFFFFFFFFF;
@@ -5495,6 +5578,31 @@ void Song::cullAudioClipVoice() {
 		bestClip->unassignVoiceSample(false);
 		D_PRINTLN("audio clip voice culled!");
 	}
+}
+
+void Song::replaceClipInSong(Clip* oldClip, Clip* newClip, int32_t clipIndex) {
+	// Update session clips array (if this is a session clip)
+	if (clipIndex >= 0) {
+		sessionClips.setPointerAtIndex(newClip, clipIndex);
+	}
+	else {
+		// Arrangement-only clip: scan and replace
+		int32_t idx = arrangementOnlyClips.getIndexForClip(oldClip);
+		if (idx >= 0) {
+			arrangementOnlyClips.setPointerAtIndex(newClip, idx);
+		}
+	}
+
+	if (oldClip == getSyncScalingClip()) {
+		syncScalingClip = newClip;
+	}
+
+	if (oldClip == currentClip) {
+		currentClip = newClip;
+	}
+
+	// Note: the caller is responsible for ensuring newClip->output is set correctly
+	// (e.g. via stealStateFrom which transfers the output pointer).
 }
 
 void Song::swapClips(Clip* newClip, Clip* oldClip, int32_t clipIndex) {

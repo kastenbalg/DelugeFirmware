@@ -30,6 +30,9 @@
 #include "memory/memory_allocator_interface.h"
 #include "model/action/action_logger.h"
 #include "model/clip/clip_instance.h"
+#include "model/clip/instrument_clip_factory.h"
+#include "model/clip/kit_clip.h"
+#include "model/clip/melodic_clip.h"
 #include "model/consequence/consequence_note_row_mute.h"
 #include "model/consequence/consequence_scale_add_note.h"
 #include "model/drum/drum_name.h"
@@ -99,6 +102,52 @@ InstrumentClip::InstrumentClip(Song* song) : Clip(ClipType::INSTRUMENT), noteRow
 	outputTypeWhileLoading = OutputType::SYNTH; // NOTE: (Kate) was 0, should probably be NONE
 }
 
+bool InstrumentClip::isKitClip() const {
+	return output && output->type == OutputType::KIT;
+}
+
+void InstrumentClip::stealStateFrom(InstrumentClip* source) {
+	// Copy all Clip base fields
+	Clip::cloneFrom(source);
+
+	// Copy InstrumentClip scalar fields not covered by copyBasicsFrom / cloneFrom
+	midiBank = source->midiBank;
+	midiSub = source->midiSub;
+	midiPGM = source->midiPGM;
+	onKeyboardScreen = source->onKeyboardScreen;
+	inScaleMode = source->inScaleMode;
+	wrapEditing = source->wrapEditing;
+	wrapEditLevel = source->wrapEditLevel;
+	yScroll = source->yScroll;
+	keyboardState = source->keyboardState;
+	affectEntire = source->affectEntire;
+	outputTypeWhileLoading = source->outputTypeWhileLoading;
+	ticksTilNextNoteRowEvent = source->ticksTilNextNoteRowEvent;
+	noteRowsNumTicksBehindClip = source->noteRowsNumTicksBehindClip;
+	soundMidiCommand = source->soundMidiCommand;
+
+	memcpy(backedUpInstrumentSlot, source->backedUpInstrumentSlot, sizeof(backedUpInstrumentSlot));
+	memcpy(backedUpInstrumentSubSlot, source->backedUpInstrumentSubSlot, sizeof(backedUpInstrumentSubSlot));
+	for (int32_t i = 0; i < 2; i++) {
+		backedUpInstrumentName[i].set(&source->backedUpInstrumentName[i]);
+		backedUpInstrumentDirPath[i].set(&source->backedUpInstrumentDirPath[i]);
+	}
+	arpSettings.cloneFrom(&source->arpSettings);
+
+	// Steal NoteRowVector (swap: source becomes empty, this gets all the rows)
+	noteRows.swapStateWith(&source->noteRows);
+
+	// Steal paramManager (moves all param collections; source becomes empty)
+	paramManager.stealParamCollectionsFrom(&source->paramManager, true);
+
+	// Steal backedUpParamManagerMIDI
+	backedUpParamManagerMIDI.stealParamCollectionsFrom(&source->backedUpParamManagerMIDI, true);
+
+	// Transfer output (instrument) attachment
+	output = source->output;
+	source->output = nullptr;
+}
+
 // You must call prepareForDestruction() before this, preferably by calling Song::deleteClipObject()
 // Will call audio routine!!! Necessary to avoid voice cuts, especially when switching song
 InstrumentClip::~InstrumentClip() {
@@ -150,12 +199,12 @@ void InstrumentClip::copyBasicsFrom(Clip const* otherClip) {
 // Will replace the Clip in the modelStack, if success.
 Error InstrumentClip::clone(ModelStackWithTimelineCounter* modelStack, bool shouldFlattenReversing) const {
 
-	void* clipMemory = allocExternal(sizeof(InstrumentClip));
-	if (!clipMemory) {
+	// Don't supply Song — yScroll will be set in copyBasicsFrom().
+	OutputType cloneType = isKitClip() ? OutputType::KIT : OutputType::SYNTH;
+	InstrumentClip* newClip = createInstrumentClip(cloneType);
+	if (!newClip) {
 		return Error::INSUFFICIENT_RAM;
 	}
-
-	auto newClip = new (clipMemory) InstrumentClip(); // Don't supply Song. yScroll will get set in copyBasicsFrom()
 
 	newClip->copyBasicsFrom(this);
 
@@ -167,8 +216,9 @@ Error InstrumentClip::clone(ModelStackWithTimelineCounter* modelStack, bool shou
 	Error error = newClip->paramManager.cloneParamCollectionsFrom(&paramManager, true, true, reverseWithLength);
 	if (error != Error::NONE) {
 deleteClipAndGetOut:
+		void* toDealloc = dynamic_cast<void*>(newClip);
 		newClip->~InstrumentClip();
-		delugeDealloc(clipMemory);
+		delugeDealloc(toDealloc);
 		return error;
 	}
 
@@ -1011,118 +1061,25 @@ NoteRow* InstrumentClip::getNoteRowForYNote(int32_t yNote, int32_t* getIndex) {
 	return nullptr;
 }
 
-// May set noteRow to NULL, of course.
-// Will correctly do that if we're not a Kit Clip.
+// Default implementations for kit-only methods (real implementations in KitClip)
 ModelStackWithNoteRow* InstrumentClip::getNoteRowForSelectedDrum(ModelStackWithTimelineCounter* modelStack) {
-	int32_t noteRowId;
-	NoteRow* noteRow = nullptr;
-	if (output->type == OutputType::KIT) {
-		Kit* kit = (Kit*)output;
-		if (kit->selectedDrum) {
-			noteRow = getNoteRowForDrum(kit->selectedDrum, &noteRowId);
-		}
-	}
-	return modelStack->addNoteRow(noteRowId, noteRow);
+	return modelStack->addNoteRow(0, nullptr);
 }
 
 ModelStackWithNoteRow* InstrumentClip::getNoteRowForDrum(ModelStackWithTimelineCounter* modelStack, Drum* drum) {
-	int32_t noteRowId;
-	NoteRow* noteRow = getNoteRowForDrum(drum, &noteRowId);
-	return modelStack->addNoteRow(noteRowId, noteRow);
+	return modelStack->addNoteRow(0, nullptr);
 }
 
-NoteRow* InstrumentClip::getNoteRowForDrum(Drum* drum, int32_t* getIndex) {
-
-	for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-		if (thisNoteRow->drum == drum) {
-			if (getIndex) {
-				*getIndex = i;
-			}
-			return thisNoteRow;
-		}
-	}
-
-	return nullptr;
-}
-
-// Should only be called for Kit Clips
 ModelStackWithNoteRow* InstrumentClip::getNoteRowForDrumName(ModelStackWithTimelineCounter* modelStack,
                                                              char const* name) {
-
-	int32_t i;
-	NoteRow* thisNoteRow;
-
-	for (i = 0; i < noteRows.getNumElements(); i++) {
-		thisNoteRow = noteRows.getElement(i);
-		if (thisNoteRow->drum && thisNoteRow->paramManager.containsAnyMainParamCollections()
-		    && thisNoteRow->drum->type == DrumType::SOUND) {
-			SoundDrum* thisDrum = (SoundDrum*)thisNoteRow->drum;
-
-			if (thisDrum->name.equalsCaseIrrespective(name)) {
-				goto foundIt;
-			}
-		}
-	}
-
-	thisNoteRow = nullptr;
-
-foundIt:
-	return modelStack->addNoteRow(i, thisNoteRow);
+	return modelStack->addNoteRow(0, nullptr);
 }
 
-// Beware - this may change yScroll (via currentSong->setRootNote())
-// *scaleAltered will not be set to false first - set it yourself. So that this can be called multiple times
+// Default implementation — real implementation in MelodicClip
 ModelStackWithNoteRow* InstrumentClip::getOrCreateNoteRowForYNote(int32_t yNote,
                                                                   ModelStackWithTimelineCounter* modelStack,
                                                                   Action* action, bool* scaleAltered) {
-	ModelStackWithNoteRow* modelStackWithNoteRow = getNoteRowForYNote(yNote, modelStack);
-
-	// If one didn't already exist, create one
-	if (!modelStackWithNoteRow->getNoteRowAllowNull()) {
-		int32_t noteRowIndex;
-		NoteRow* thisNoteRow = noteRows.insertNoteRowAtY(yNote, &noteRowIndex);
-
-		// If that created successfully (i.e. enough RAM)...
-		if (thisNoteRow) {
-
-			// Check that this yNote is allowed within our scale, if we have a scale. And if not allowed, then...
-			if (!modelStack->song->isYNoteAllowed(yNote, inScaleMode)) {
-
-				if (scaleAltered) {
-					*scaleAltered = true;
-				}
-
-				// Recalculate the scale
-				int32_t newI = thisNoteRow->notes.insertAtKey(
-				    0); // Total hack - make it look like the NoteRow has a Note, so it doesn't get discarded during
-				        // setRootNote(). We set it back (and then will soon give it a real note) really soon
-				modelStack->song->setRootNote(modelStack->song->key.rootNote);
-
-				thisNoteRow = getNoteRowForYNote(yNote); // Must re-get it
-				if (ALPHA_OR_BETA_VERSION && !thisNoteRow) {
-					FREEZE_WITH_ERROR("E -1");
-				}
-
-				thisNoteRow->notes.empty(); // Undo our "total hack", above
-
-				if (action) {
-					void* consMemory = allocExternal(sizeof(ConsequenceScaleAddNote));
-
-					if (consMemory) {
-						ConsequenceScaleAddNote* newConsequence =
-						    new (consMemory) ConsequenceScaleAddNote((yNote + 120) % 12);
-						action->addConsequence(newConsequence);
-					}
-
-					action->modeNotes[AFTER] = modelStack->song->key.modeNotes;
-				}
-			}
-
-			modelStackWithNoteRow->setNoteRow(thisNoteRow, yNote);
-		}
-	}
-	return modelStackWithNoteRow;
+	return getNoteRowForYNote(yNote, modelStack);
 }
 
 // I think you need to check (playbackHandler.isEitherClockActive() && song->isClipActive(thisClip)) before calling
@@ -1199,222 +1156,15 @@ void InstrumentClip::stopAllNotesPlaying(ModelStackWithTimelineCounter* modelSta
 	}
 }
 
-// Returns false in rare case that there wasn't enough ram to do this
-NoteRow* InstrumentClip::createNewNoteRowForYVisual(int32_t yVisual, Song* song) {
-	int32_t y = getYNoteFromYVisual(yVisual, song);
-	return noteRows.insertNoteRowAtY(y);
-}
-
-// Returns false in rare case that there wasn't enough ram to do this
-NoteRow* InstrumentClip::createNewNoteRowForKit(ModelStackWithTimelineCounter* modelStack, bool atStart,
-                                                int32_t* getIndex) {
-
-	int32_t index = atStart ? 0 : noteRows.getNumElements();
-
-	Drum* newDrum = ((Kit*)output)->getFirstUnassignedDrum(this);
-
-	NoteRow* newNoteRow = noteRows.insertNoteRowAtIndex(index);
-	if (!newNoteRow) {
-		return nullptr;
-	}
-
-	ModelStackWithNoteRow* modelStackWithNoteRow = modelStack->addNoteRow(index, newNoteRow);
-
-	newNoteRow->setDrum(newDrum, (Kit*)output, modelStackWithNoteRow); // It might end up NULL. That's fine
-
-	if (atStart) {
-		yScroll++;
-
-		// Adjust colour offset, because colour offset is relative to the lowest NoteRow, and we just made a new lowest
-		// one
-		colourOffset--;
-	}
-
-	if (getIndex) {
-		*getIndex = index;
-	}
-	return newNoteRow;
-}
+// Default implementations in header — real implementations in MelodicClip/KitClip
 
 RGB InstrumentClip::getMainColourFromY(int32_t yNote, int8_t noteRowColourOffset) {
 	return RGB::fromHue((yNote + colourOffset + noteRowColourOffset) * -8 / 3);
 }
 
-void InstrumentClip::replaceMusicalMode(const ScaleChange& changes, ModelStackWithTimelineCounter* modelStack) {
-	if (!isScaleModeClip()) {
-		return;
-	}
-	// Find all NoteRows which belong to this scale, and change their note
-	//
-	// TODO: There probably should not be _any_ rows which don't below to the
-	// current scale? FREEZE_WITH_ERROR?
-	MusicalKey key = modelStack->song->key;
-	for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-		int8_t degree = key.degreeOf(thisNoteRow->y);
-		if (degree >= 0) {
-			ModelStackWithNoteRow* modelStackWithNoteRow =
-			    modelStack->addNoteRow(getNoteRowId(thisNoteRow, i), thisNoteRow);
+// replaceMusicalMode, noteRemovedFromMode, seeWhatNotesWithinOctaveArePresent — defaults in header, real in MelodicClip
 
-			thisNoteRow->stopCurrentlyPlayingNote(modelStackWithNoteRow); // Otherwise we'd leave a MIDI note playing
-			thisNoteRow->y += changes[degree];
-		}
-	}
-
-	uint8_t oldSize = changes.source.scaleSize();
-	uint8_t newSize = changes.target.scaleSize();
-
-	// Which octave & scale degree was at the bottom of the view before scale change?
-	int yOctave = yScroll / oldSize;
-	int yDegree = yScroll - (yOctave * oldSize);
-	// Take scale size changes into account and adjust yScroll to keep same octave visible
-	yScroll = yOctave * newSize + yDegree;
-}
-
-void InstrumentClip::noteRemovedFromMode(int32_t yNoteWithinOctave, Song* song) {
-	if (!isScaleModeClip()) {
-		return;
-	}
-
-	for (int32_t i = 0; i < noteRows.getNumElements();) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-
-		if ((thisNoteRow->y + 120) % 12 == yNoteWithinOctave) {
-			noteRows.deleteNoteRowAtIndex(i);
-		}
-		else {
-			i++;
-		}
-	}
-}
-
-void InstrumentClip::seeWhatNotesWithinOctaveArePresent(NoteSet& notesWithinOctavePresent, MusicalKey key) {
-	for (int32_t i = 0; i < noteRows.getNumElements();) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-
-		if (!thisNoteRow->hasNoNotes()) {
-			notesWithinOctavePresent.add(key.intervalOf(thisNoteRow->getNoteCode()));
-			i++;
-		}
-
-		// If this NoteRow has no notes, delete it, otherwise we'll have problems as the musical mode is changed
-		else {
-			noteRows.deleteNoteRowAtIndex(i);
-		}
-	}
-}
-
-/* Chromatic tranpose of all notes by fixed semitone amount */
-void InstrumentClip::transpose(int32_t semitones, ModelStackWithTimelineCounter* modelStack) {
-	// Make sure no notes sounding
-	stopAllNotesPlaying(modelStack);
-
-	// Must also do auditioned notes, since transpose can now be sequenced and change
-	// noterows while we hold an audition pad.
-	char modelStackMemory[MODEL_STACK_MAX_SIZE];
-	ModelStack* modelStackWithSong = setupModelStackWithSong(modelStackMemory, currentSong);
-	output->stopAnyAuditioning(modelStackWithSong);
-
-	for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-		thisNoteRow->y += semitones;
-	}
-
-	yScroll += semitones;
-	colourOffset -= semitones;
-}
-
-void InstrumentClip::nudgeNotesVertically(int32_t direction, VerticalNudgeType type,
-                                          ModelStackWithTimelineCounter* modelStack) {
-	// This method is limited to no more than an octave of "change", currently used
-	// by the "hold and turn vertical encoder" and "shift + hold and turn vertical
-	// encoder" shorcuts.
-
-	if (!direction) {
-		// It's not clear if we ever get "zero" as direction of change, but let's
-		// make sure we behave sensibly in that case as well.
-		return;
-	}
-
-	int32_t change = direction > 0 ? 1 : -1;
-	if (type == VerticalNudgeType::OCTAVE) {
-		if (isScaleModeClip()) {
-			change *= modelStack->song->key.modeNotes.count();
-		}
-		else {
-			change *= 12;
-		}
-	}
-
-	// Make sure no notes sounding
-	stopAllNotesPlaying(modelStack);
-
-	if (!this->isScaleModeClip()) {
-		// Non scale clip, transpose directly by semitone jumps
-		for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-			NoteRow* thisNoteRow = noteRows.getElement(i);
-			// transpose by semitones or by octave
-			thisNoteRow->y += change;
-		}
-	}
-	else {
-		// Scale clip, transpose by scale note jumps
-
-		// wanting to change a full octave
-		if (std::abs(change) == modelStack->song->key.modeNotes.count()) {
-			int32_t changeInSemitones = (change > 0) ? 12 : -12;
-			for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-				NoteRow* thisNoteRow = noteRows.getElement(i);
-				// transpose by semitones or by octave
-				thisNoteRow->y += changeInSemitones;
-			}
-		}
-
-		// wanting to change less than an octave
-		else {
-			for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-				MusicalKey key = modelStack->song->key;
-				NoteRow* thisNoteRow = noteRows.getElement(i);
-				int32_t changeInSemitones = 0;
-				int32_t yNoteWithinOctave = key.intervalOf(thisNoteRow->getNoteCode());
-				int32_t oldModeNoteIndex = 0;
-				for (; oldModeNoteIndex < key.modeNotes.count(); oldModeNoteIndex++) {
-					if (key.modeNotes[oldModeNoteIndex] == yNoteWithinOctave) {
-						break;
-					}
-				}
-				int32_t newModeNoteIndex = (oldModeNoteIndex + change + modelStack->song->key.modeNotes.count())
-				                           % modelStack->song->key.modeNotes.count();
-
-				int32_t s = 0;
-				if ((change > 0 && newModeNoteIndex > oldModeNoteIndex)
-				    || (change < 0 && newModeNoteIndex < oldModeNoteIndex)) {
-					// within the same octave
-					changeInSemitones = modelStack->song->key.modeNotes[newModeNoteIndex]
-					                    - modelStack->song->key.modeNotes[oldModeNoteIndex];
-					s = 1;
-				}
-				else {
-					if (change > 0) {
-						// go up an octave
-						changeInSemitones = modelStack->song->key.modeNotes[newModeNoteIndex]
-						                    - modelStack->song->key.modeNotes[oldModeNoteIndex] + 12;
-						s = 2;
-					}
-					else {
-						// go down an octave
-						changeInSemitones = modelStack->song->key.modeNotes[newModeNoteIndex]
-						                    - modelStack->song->key.modeNotes[oldModeNoteIndex] - 12;
-						s = 3;
-					}
-				}
-				// transpose by semitones
-				thisNoteRow->y += changeInSemitones;
-			}
-		}
-	}
-	yScroll += change;
-}
+// transpose, nudgeNotesVertically — defaults in header, real implementations in MelodicClip
 
 // Lock rendering before calling this!
 bool InstrumentClip::renderAsSingleRow(ModelStackWithTimelineCounter* modelStack, TimelineView* editorScreen,
@@ -3283,19 +3033,7 @@ void InstrumentClip::stopAllNotesForMIDIOrCV(ModelStackWithTimelineCounter* mode
 	}
 }
 
-int16_t InstrumentClip::getTopYNote() {
-	if (noteRows.getNumElements() == 0) {
-		return 64;
-	}
-	return noteRows.getElement(noteRows.getNumElements() - 1)->y;
-}
-
-int16_t InstrumentClip::getBottomYNote() {
-	if (noteRows.getNumElements() == 0) {
-		return 64;
-	}
-	return noteRows.getElement(0)->y;
-}
+// getTopYNote, getBottomYNote — defaults in header (return 64), real implementations in MelodicClip
 
 uint32_t InstrumentClip::getWrapEditLevel() {
 	return wrapEditing ? wrapEditLevel : kMaxSequenceLength; // Used to return the Clip length in this case, but that
@@ -3306,9 +3044,7 @@ bool InstrumentClip::hasSameInstrument(InstrumentClip* otherClip) {
 	return (output == otherClip->output);
 }
 
-bool InstrumentClip::isScaleModeClip() {
-	return (inScaleMode && output->type != OutputType::KIT);
-}
+// isScaleModeClip — default (return false) in header, real implementation in MelodicClip
 
 // TODO: this should be a virtual function in Instrument
 // modelStack could contain a NULL noteRow if there isn't one - e.g. in a Synth Clip
@@ -3609,24 +3345,7 @@ void InstrumentClip::compensateVolumeForResonance(ModelStackWithTimelineCounter*
 	}
 }
 
-void InstrumentClip::deleteOldDrumNames() {
-	for (int32_t i = 0; i < noteRows.getNumElements(); i++) {
-		NoteRow* thisNoteRow = noteRows.getElement(i);
-		thisNoteRow->deleteOldDrumNames();
-	}
-}
-
-void InstrumentClip::ensureScrollWithinKitBounds() {
-	if (yScroll < 1 - kDisplayHeight) {
-		yScroll = 1 - kDisplayHeight;
-	}
-	else {
-		int32_t maxYScroll = getNumNoteRows() - 1;
-		if (yScroll > maxYScroll) {
-			yScroll = maxYScroll;
-		}
-	}
-}
+// deleteOldDrumNames, ensureScrollWithinKitBounds — defaults (no-op) in header, real in KitClip
 
 // Make sure not a Kit before calling this
 bool InstrumentClip::isScrollWithinRange(int32_t scrollAmount, int32_t newYNote) {
@@ -3792,11 +3511,13 @@ Instrument* InstrumentClip::changeOutputType(ModelStackWithTimelineCounter* mode
 
 	shouldReplaceWholeInstrument = (canReplaceWholeInstrument && !instrumentAlreadyInSong);
 
-	// If replacing whole Instrument
+	// Run changeInstrument on the OLD clip. The transition methods (prepareToEnterKitMode,
+	// assignDrumsToNoteRows, prepNoteRowsForExitingKitMode, unassignAllNoteRowsFromDrums)
+	// are real implementations on InstrumentClip that correctly use virtual dispatch for
+	// the OLD clip type's getNoteRowOnScreen/getYVisualFromYNote etc.
 	if (shouldReplaceWholeInstrument) {
 		modelStack->song->replaceInstrument((Instrument*)output, newInstrument);
 	}
-
 	else {
 		Error error = changeInstrument(modelStack, newInstrument, nullptr,
 		                               InstrumentRemoval::DELETE_OR_HIBERNATE_IF_UNUSED, nullptr, true);
@@ -3809,12 +3530,44 @@ Instrument* InstrumentClip::changeOutputType(ModelStackWithTimelineCounter* mode
 
 	// Turning into Kit
 	if (newOutputType == OutputType::KIT) {
-		// Make sure we're not scrolled too far up (this has to happen amongst this code down here - NoteRows are
-		// deleted in the functions called above)
 		int32_t maxScroll = (int32_t)getNumNoteRows() - kDisplayHeight;
 		maxScroll = std::max(0_i32, maxScroll);
 		yScroll = std::min(yScroll, maxScroll);
 		((Kit*)newInstrument)->selectedDrum = nullptr;
+	}
+
+	// If we crossed the Kit<->Melodic boundary, replace the clip with the correct subclass.
+	// changeInstrument already ran on the old clip (above), handling all NoteRow prep.
+	// Now we create the right subclass and transfer all state.
+	bool crossedKitBoundary = (oldOutputType == OutputType::KIT) != (newOutputType == OutputType::KIT);
+	if (crossedKitBoundary) {
+		InstrumentClip* newClip = createInstrumentClip(newOutputType);
+		if (newClip) {
+			// Transfer all state (noteRows, paramManagers, output pointer, all fields)
+			newClip->stealStateFrom(this);
+
+			// CRITICAL: immediately update the output's activeClip to the new clip.
+			modelStack->setTimelineCounter(newClip);
+			if (newClip->output && newClip->output->getActiveClip() == this) {
+				newClip->output->setActiveClip(modelStack, PgmChangeSend::NEVER);
+			}
+
+			// Replace this clip in song data structures (does NOT delete this)
+			int32_t clipIndex = modelStack->song->sessionClips.getIndexForClip(this);
+			modelStack->song->replaceClipInSong(this, newClip, clipIndex);
+
+			// Call outputChanged on the NEW clip
+			newClip->outputChanged(modelStack, newInstrument);
+			modelStack->song->ensureAllInstrumentsHaveAClipOrBackedUpParamManager("E062", "H062");
+			display->removeWorkingAnimation();
+
+			// Destroy the old (empty) clip shell
+			void* oldMem = dynamic_cast<void*>(this);
+			this->~InstrumentClip();
+			delugeDealloc(oldMem);
+
+			return newInstrument;
+		}
 	}
 
 	outputChanged(modelStack, newInstrument);
@@ -4236,7 +3989,7 @@ void InstrumentClip::finishLinearRecording(ModelStackWithTimelineCounter* modelS
 Clip* InstrumentClip::cloneAsNewOverdub(ModelStackWithTimelineCounter* modelStack, OverDubType newOverdubNature) {
 
 	// Allocate memory for Clip
-	void* clipMemory = allocExternal(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(instrumentClipAllocSize());
 	if (!clipMemory) {
 ramError:
 		display->displayError(Error::INSUFFICIENT_RAM);
@@ -4251,7 +4004,13 @@ ramError:
 		return nullptr;
 	}
 
-	InstrumentClip* newInstrumentClip = new (clipMemory) InstrumentClip(modelStack->song);
+	InstrumentClip* newInstrumentClip;
+	if (isKitClip()) {
+		newInstrumentClip = new (clipMemory) KitClip(modelStack->song);
+	}
+	else {
+		newInstrumentClip = new (clipMemory) MelodicClip(modelStack->song);
+	}
 	newInstrumentClip->setInstrument((Instrument*)output, modelStack->song, &newParamManager);
 
 	newInstrumentClip->setupForRecordingAsAutoOverdub(
@@ -4319,13 +4078,7 @@ bool InstrumentClip::currentlyScrollableAndZoomable() {
 
 // Call this after setInstrument() / setAudioInstrument(). I forget exactly where setupPatching() fits into this
 // picture... Arranger view calls that before this...
-void InstrumentClip::setupAsNewKitClipIfNecessary(ModelStackWithTimelineCounter* modelStack) {
-	if (output->type == OutputType::KIT) {
-		((Kit*)output)->resetDrumTempValues();
-		assignDrumsToNoteRows(modelStack);
-		yScroll = 0;
-	}
-}
+// setupAsNewKitClipIfNecessary — default no-op in header, real implementation in KitClip
 
 bool InstrumentClip::getCurrentlyRecordingLinearly() {
 	return currentlyRecordingLinearly;

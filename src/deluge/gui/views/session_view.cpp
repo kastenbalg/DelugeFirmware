@@ -58,6 +58,7 @@
 #include "model/clip/clip.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"
+#include "model/clip/instrument_clip_factory.h"
 #include "model/clip/instrument_clip_minder.h"
 #include "model/instrument/instrument.h"
 #include "model/instrument/melodic_instrument.h"
@@ -1717,20 +1718,17 @@ Clip* SessionView::createNewAudioClip(int32_t yDisplay) {
 Clip* SessionView::createNewInstrumentClip(OutputType outputType, int32_t yDisplay) {
 	actionLogger.deleteAllLogs();
 
-	// Allocate memory for instrument clip
-	void* clipMemory = allocExternal(sizeof(InstrumentClip));
-	if (clipMemory == nullptr) {
+	// Allocate and construct instrument clip
+	InstrumentClip* newClip = createInstrumentClip(outputType, currentSong);
+	if (!newClip) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
 	}
 
-	// create the instrument clip and param manager
-	InstrumentClip* newClip = new (clipMemory) InstrumentClip(currentSong);
-
 	// suss output
 	if (!createNewTrackForInstrumentClip(outputType, newClip, true)) {
 		newClip->~InstrumentClip();
-		delugeDealloc(clipMemory);
+		delugeDealloc(newClip);
 		return nullptr;
 	}
 
@@ -1740,7 +1738,7 @@ Clip* SessionView::createNewInstrumentClip(OutputType outputType, int32_t yDispl
 	// Insert and Resync New Clip
 	if (!insertAndResyncNewClip(newClip, yDisplay)) {
 		newClip->~InstrumentClip();
-		delugeDealloc(clipMemory);
+		delugeDealloc(newClip);
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
 	}
@@ -3541,17 +3539,16 @@ AudioClip* SessionView::gridCreateAudioClipWithNewTrack() {
 }
 
 InstrumentClip* SessionView::gridCreateInstrumentClipWithNewTrack(OutputType type) {
-	// Allocate new clip
-	void* memory = allocExternal(sizeof(InstrumentClip));
-	if (!memory) {
+	// Allocate and construct new clip
+	InstrumentClip* newClip = createInstrumentClip(type, currentSong);
+	if (!newClip) {
 		display->displayError(Error::INSUFFICIENT_RAM);
 		return nullptr;
 	}
 
-	InstrumentClip* newClip = new (memory) InstrumentClip(currentSong);
 	if (!createNewTrackForInstrumentClip(type, newClip, true)) {
 		newClip->~InstrumentClip();
-		delugeDealloc(memory);
+		delugeDealloc(newClip);
 		return nullptr;
 	}
 

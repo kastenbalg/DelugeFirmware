@@ -70,6 +70,7 @@ public:
 	Clip* getClipToRecordTo();
 	[[nodiscard]] bool isArrangementOnlyClip() const;
 	bool isActiveOnOutput();
+	virtual bool isKitClip() const { return false; }
 	virtual bool deleteSoundsWhichWontSound(Song* song);
 	virtual Error appendClip(ModelStackWithTimelineCounter* thisModelStack,
 	                         ModelStackWithTimelineCounter* otherModelStack);

@@ -21,6 +21,7 @@
 #include "memory/memory_allocator_interface.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"
+#include "model/clip/instrument_clip_factory.h"
 #include "model/instrument/midi_instrument.h"
 #include "model/model_stack.h"
 #include "processing/engines/audio_engine.h"
@@ -145,7 +146,7 @@ bool Instrument::readTagFromFile(Deserializer& reader, char const* tagName) {
 Clip* Instrument::createNewClipForArrangementRecording(ModelStack* modelStack) {
 
 	// Allocate memory for Clip
-	void* clipMemory = allocExternal(sizeof(InstrumentClip));
+	void* clipMemory = allocExternal(instrumentClipAllocSize());
 	if (!clipMemory) {
 		return nullptr;
 	}

@@ -51,6 +51,7 @@
 #include "model/clip/audio_clip.h"
 #include "model/clip/clip_instance.h"
 #include "model/clip/instrument_clip.h"
+#include "model/clip/instrument_clip_factory.h"
 #include "model/clip/instrument_clip_minder.h"
 #include "model/consequence/consequence_arranger_params_time_inserted.h"
 #include "model/consequence/consequence_clip_existence.h"
@@ -1648,20 +1649,23 @@ void ArrangerView::createNewClipForClipInstance(Output* output, ClipInstance* cl
 		return exitSubModeWithoutAction();
 	}
 
-	int32_t size = (output->type == OutputType::AUDIO) ? sizeof(AudioClip) : sizeof(InstrumentClip);
-
-	void* memory = allocExternal(size);
-	if (!memory) {
-		display->displayError(Error::INSUFFICIENT_RAM);
-		return exitSubModeWithoutAction();
-	}
-
 	Clip* newClip;
 
-	if (output->type == OutputType::AUDIO)
+	if (output->type == OutputType::AUDIO) {
+		void* memory = allocExternal(sizeof(AudioClip));
+		if (!memory) {
+			display->displayError(Error::INSUFFICIENT_RAM);
+			return exitSubModeWithoutAction();
+		}
 		newClip = new (memory) AudioClip();
-	else
-		newClip = new (memory) InstrumentClip(currentSong);
+	}
+	else {
+		newClip = createInstrumentClip(output->type, currentSong);
+		if (!newClip) {
+			display->displayError(Error::INSUFFICIENT_RAM);
+			return exitSubModeWithoutAction();
+		}
+	}
 
 	newClip->loopLength = clipInstance->length;
 	newClip->section = 255;
@@ -1682,8 +1686,9 @@ void ArrangerView::createNewClipForClipInstance(Output* output, ClipInstance* cl
 
 	if (error != Error::NONE) {
 		display->displayError(error);
+		void* toDealloc = dynamic_cast<void*>(newClip);
 		newClip->~Clip();
-		delugeDealloc(memory);
+		delugeDealloc(toDealloc);
 		return exitSubModeWithoutAction();
 	}
 

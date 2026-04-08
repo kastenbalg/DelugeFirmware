@@ -1645,7 +1645,7 @@ void AutomationView::handleSelectEncoderButtonAction(bool on) {
 			return;
 		}
 
-		if ((getCurrentOutputType() == OutputType::KIT) && (getCurrentInstrumentClip()->affectEntire)) {
+		if ((getCurrentInstrumentClip()->isKitClip()) && (getCurrentInstrumentClip()->affectEntire)) {
 			soundEditor.setupKitGlobalFXMenu = true;
 		}
 
@@ -2738,7 +2738,7 @@ void AutomationView::selectNonGlobalParam(int32_t offset, Clip* clip) {
 		                                             kNumNonGlobalParamsForAutomation);
 		{
 			auto [kind, id] = nonGlobalParamsForAutomation[idx];
-			if ((clip->output->type == OutputType::KIT) && (kind == params::Kind::UNPATCHED_SOUND)
+			if ((clip->isKitClip()) && (kind == params::Kind::UNPATCHED_SOUND)
 			    && (id == params::UNPATCHED_PORTAMENTO)) {
 				if (offset < 0) {
 					offset -= 1;
@@ -3198,7 +3198,7 @@ bool AutomationView::getAffectEntire() {
 		return true;
 	}
 	// are you in the sound menu for a kit?
-	else if (getCurrentOutputType() == OutputType::KIT && getCurrentUI() == &soundEditor
+	else if (getCurrentInstrumentClip()->isKitClip() && getCurrentUI() == &soundEditor
 	         && !soundEditor.inSettingsMenu()) {
 		// if you're in the kit global FX menu, the menu context is the same as if affect entire is enabled
 		if (soundEditor.setupKitGlobalFXMenu) {

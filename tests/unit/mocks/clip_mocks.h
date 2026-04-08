@@ -13,7 +13,23 @@ public:
 	bool deleted = false;
 };
 
-class InstrumentClip : public Clip {};
+class InstrumentClip : public Clip {
+public:
+	virtual bool isKitClip() const { return false; }
+	virtual bool isConcreteSubclass() const { return false; }
+};
+
+class KitClip : public InstrumentClip {
+public:
+	bool isKitClip() const override { return true; }
+	bool isConcreteSubclass() const override { return true; }
+};
+
+class MelodicClip : public InstrumentClip {
+public:
+	bool isKitClip() const override { return false; }
+	bool isConcreteSubclass() const override { return true; }
+};
 
 class AudioClip : public Clip {};
 

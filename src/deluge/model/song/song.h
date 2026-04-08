@@ -367,6 +367,15 @@ public:
 	int32_t removeOutputFromMainList(Output* output, bool stopAnyAuditioningFirst = true);
 	void swapClips(Clip* newClip, Clip* oldClip, int32_t clipIndex);
 	Clip* replaceInstrumentClipWithAudioClip(Clip* oldClip, int32_t clipIndex);
+
+	/// After loading old song files (which use "instrumentClip" for all types),
+	/// upgrade base InstrumentClip instances to KitClip or MelodicClip based on outputTypeWhileLoading.
+	void upgradeInstrumentClipsPostLoad();
+
+	/// Replace oldClip with newClip in all song data structures (sessionClips, currentClip,
+	/// syncScalingClip). Does NOT delete oldClip — the caller is responsible for that.
+	/// clipIndex is the index in sessionClips (-1 for arrangement-only clips).
+	void replaceClipInSong(Clip* oldClip, Clip* newClip, int32_t clipIndex);
 	void setDefaultVelocityForAllInstruments(uint8_t newDefaultVelocity);
 	void midiCableBendRangeUpdatedViaMessage(ModelStack* modelStack, MIDICable& cable, int32_t channelOrZone,
 	                                         int32_t whichBendRange, int32_t bendSemitones);

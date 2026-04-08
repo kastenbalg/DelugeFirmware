@@ -2036,7 +2036,7 @@ void View::drawOutputNameFromDetails(OutputType outputType, int32_t channel, int
 		}
 
 		setLedState(LED::KEYBOARD, (clip && clip->onKeyboardScreen));
-		setLedState(LED::SCALE_MODE, (clip && clip->inScaleMode && clip->output->type != OutputType::KIT));
+		setLedState(LED::SCALE_MODE, (clip && clip->inScaleMode && !clip->isKitClip()));
 		setLedState(LED::CROSS_SCREEN_EDIT, (clip && clip->wrapEditing));
 	}
 
@@ -2599,7 +2599,11 @@ bool View::changeOutputType(OutputType newOutputType, ModelStackWithTimelineCoun
 		return false;
 	}
 
-	// Do a redraw. Obviously the Clip is the same
+	// Re-read clip from modelStack — changeOutputType may have replaced the clip
+	// with a new subclass (KitClip or MelodicClip) when crossing the Kit<->Melodic boundary.
+	clip = (InstrumentClip*)modelStack->getTimelineCounter();
+
+	// Do a redraw
 	setActiveModControllableTimelineCounter(clip);
 	displayOutputName(newInstrument, doBlink, clip);
 
