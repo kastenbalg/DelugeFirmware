@@ -106,6 +106,21 @@ bool InstrumentClip::isKitClip() const {
 	return output && output->type == OutputType::KIT;
 }
 
+ModControllable* InstrumentClip::getModControllableForNoteRow(NoteRow* noteRow) {
+	// Runtime-dispatched fallback (used during loading before post-load upgrade)
+	if (isKitClip() && noteRow && noteRow->drum) {
+		return noteRow->drum->toModControllable();
+	}
+	return output ? output->toModControllable() : nullptr;
+}
+
+ParamManager* InstrumentClip::getParamManagerForNoteRow(NoteRow* noteRow) {
+	if (isKitClip() && noteRow && noteRow->drum) {
+		return &noteRow->paramManager;
+	}
+	return &paramManager;
+}
+
 void InstrumentClip::stealStateFrom(InstrumentClip* source) {
 	// Copy all Clip base fields
 	Clip::cloneFrom(source);

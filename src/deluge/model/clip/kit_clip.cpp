@@ -16,6 +16,8 @@
  */
 
 #include "model/clip/kit_clip.h"
+#include "gui/views/arranger_view.h"
+#include "gui/views/session_view.h"
 #include "model/drum/drum.h"
 #include "model/instrument/kit.h"
 #include "model/model_stack.h"
@@ -62,6 +64,50 @@ bool KitClip::allowNoteTails(ModelStackWithNoteRow* modelStack) {
 	ModelStackWithSoundFlags* modelStackWithSoundFlags =
 	    modelStack->addOtherTwoThings(noteRow->drum->toModControllable(), &noteRow->paramManager)->addSoundFlags();
 	return noteRow->drum->allowNoteTails(modelStackWithSoundFlags);
+}
+
+// -----------------------------------------------------------------------
+// ModControllable/ParamManager derivation
+// -----------------------------------------------------------------------
+
+void KitClip::getActiveModControllable(ModelStackWithTimelineCounter* modelStack) {
+	if (!affectEntire && getRootUI() != &sessionView && getRootUI() != &arrangerView) {
+		Kit* kit = (Kit*)output;
+
+		if (!kit->selectedDrum || kit->selectedDrum->type != DrumType::SOUND) {
+returnNull:
+			modelStack->setTimelineCounter(nullptr);
+			modelStack->addOtherTwoThingsButNoNoteRow(nullptr, nullptr);
+		}
+		else {
+			int32_t noteRowIndex;
+			NoteRow* noteRow = getNoteRowForDrum(kit->selectedDrum, &noteRowIndex);
+
+			if (!noteRow) {
+				goto returnNull;
+			}
+
+			modelStack->addNoteRow(noteRowIndex, noteRow)
+			    ->addOtherTwoThings((SoundDrum*)kit->selectedDrum, &noteRow->paramManager);
+		}
+	}
+	else {
+		Clip::getActiveModControllable(modelStack);
+	}
+}
+
+ModControllable* KitClip::getModControllableForNoteRow(NoteRow* noteRow) {
+	if (noteRow && noteRow->drum) {
+		return noteRow->drum->toModControllable();
+	}
+	return output ? output->toModControllable() : nullptr;
+}
+
+ParamManager* KitClip::getParamManagerForNoteRow(NoteRow* noteRow) {
+	if (noteRow && noteRow->drum) {
+		return &noteRow->paramManager;
+	}
+	return &paramManager;
 }
 
 // -----------------------------------------------------------------------

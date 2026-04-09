@@ -425,6 +425,7 @@ void AutomationView::initializeView() {
 	InstrumentClip* clip = getCurrentInstrumentClip();
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	if (!onArrangerView) {
 		// only applies to instrument clips (not audio)
@@ -442,7 +443,7 @@ void AutomationView::initializeView() {
 
 			// if we're in a kit, we want to make sure the param selected is valid for current context
 			// e.g. only UNPATCHED_GLOBAL param kind's can be used with Kit Affect Entire enabled
-			if ((outputType == OutputType::KIT) && (clip->lastSelectedParamKind != params::Kind::NONE)) {
+			if ((isKit) && (clip->lastSelectedParamKind != params::Kind::NONE)) {
 				if (clip->lastSelectedParamKind == params::Kind::UNPATCHED_GLOBAL) {
 					clip->affectEntire = true;
 				}
@@ -461,7 +462,7 @@ void AutomationView::initializeView() {
 	// if we're in the note editor and we're in a kit,
 	// check that the lastAuditionedYDisplay is in sync with the selected drum
 	if (inNoteEditor()) {
-		if (outputType == OutputType::KIT) {
+		if (isKit) {
 			potentiallyVerticalScrollToSelectedDrum(clip, output);
 		}
 	}
@@ -674,6 +675,7 @@ void AutomationView::performActualRender(RGB image[][kDisplayWidth + kSideBarWid
 	Clip* clip = getCurrentClip();
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	char modelStackMemory[MODEL_STACK_MAX_SIZE];
 	ModelStackWithTimelineCounter* modelStackWithTimelineCounter = nullptr;
@@ -726,9 +728,9 @@ void AutomationView::performActualRender(RGB image[][kDisplayWidth + kSideBarWid
 		// you're not in a kit where you haven't selected a drum and you haven't selected affect entire either
 		// you're not in a kit where no sound drum has been selected and you're not editing velocity
 		// you're in a kit where midi or CV sound drum has been selected and you're editing velocity
-		if (onArrangerView || !(outputType == OutputType::KIT && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
+		if (onArrangerView || !(isKit && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
 			bool isMIDICVDrum = false;
-			if (outputType == OutputType::KIT && !getAffectEntire()) {
+			if (isKit && !getAffectEntire()) {
 				isMIDICVDrum = (((Kit*)output)->selectedDrum
 				                && ((((Kit*)output)->selectedDrum->type == DrumType::MIDI)
 				                    || (((Kit*)output)->selectedDrum->type == DrumType::GATE)));
@@ -766,8 +768,9 @@ void AutomationView::renderAutomationOverview(ModelStackWithTimelineCounter* mod
                                               OutputType outputType, RGB image[][kDisplayWidth + kSideBarWidth],
                                               uint8_t occupancyMask[][kDisplayWidth + kSideBarWidth], int32_t xDisplay,
                                               bool isMIDICVDrum) {
-	bool singleSoundDrum = (outputType == OutputType::KIT && !getAffectEntire()) && !isMIDICVDrum;
-	bool affectEntireKit = (outputType == OutputType::KIT && getAffectEntire());
+	bool isKit = clip->isKitClip();
+	bool singleSoundDrum = (isKit && !getAffectEntire()) && !isMIDICVDrum;
+	bool affectEntireKit = (isKit && getAffectEntire());
 	for (int32_t yDisplay = 0; yDisplay < kDisplayHeight; yDisplay++) {
 
 		RGB& pixel = image[yDisplay][xDisplay];
@@ -784,7 +787,7 @@ void AutomationView::renderAutomationOverview(ModelStackWithTimelineCounter* mod
 
 				else if (unpatchedNonGlobalParamShortcuts[xDisplay][yDisplay] != kNoParamID) {
 					// don't make portamento available for automation in kit rows
-					if ((outputType == OutputType::KIT)
+					if ((isKit)
 					    && (unpatchedNonGlobalParamShortcuts[xDisplay][yDisplay] == params::UNPATCHED_PORTAMENTO)) {
 						pixel = colours::black; // erase pad
 						continue;
@@ -881,8 +884,7 @@ void AutomationView::renderAutomationOverview(ModelStackWithTimelineCounter* mod
 			pixel = colours::black; // erase pad
 		}
 
-		if (!onArrangerView && !(outputType == OutputType::KIT && getAffectEntire())
-		    && clip->type == ClipType::INSTRUMENT) {
+		if (!onArrangerView && !(isKit && getAffectEntire()) && clip->type == ClipType::INSTRUMENT) {
 			// highlight velocity pad
 			if (xDisplay == kVelocityShortcutX && yDisplay == kVelocityShortcutY) {
 				pixel = colours::grey;
@@ -967,6 +969,7 @@ void AutomationView::renderDisplay(int32_t knobPosLeft, int32_t knobPosRight, bo
 	Clip* clip = getCurrentClip();
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	// if you're not in a MIDI instrument clip, convert the knobPos to the same range as the menu (0-50)
 	if (inAutomationEditor() && (onArrangerView || outputType != OutputType::MIDI_OUT)) {
@@ -1030,8 +1033,9 @@ void AutomationView::renderAutomationOverviewDisplayOLED(deluge::hid::display::o
 #endif
 
 	// display Automation Overview
+	bool isKit = (outputType == OutputType::KIT);
 	char const* overviewText;
-	if (!onArrangerView && (outputType == OutputType::KIT && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
+	if (!onArrangerView && (isKit && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
 		overviewText = l10n::get(l10n::String::STRING_FOR_SELECT_A_ROW_OR_AFFECT_ENTIRE);
 		deluge::hid::display::OLED::drawPermanentPopupLookingText(overviewText);
 	}
@@ -1059,8 +1063,9 @@ void AutomationView::renderDisplay7SEG(Clip* clip, Output* output, OutputType ou
 }
 
 void AutomationView::renderAutomationOverviewDisplay7SEG(Output* output, OutputType outputType) {
+	bool isKit = (outputType == OutputType::KIT);
 	char const* overviewText;
-	if (!onArrangerView && (outputType == OutputType::KIT && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
+	if (!onArrangerView && (isKit && !getAffectEntire() && !((Kit*)output)->selectedDrum)) {
 		overviewText = l10n::get(l10n::String::STRING_FOR_SELECT_A_ROW_OR_AFFECT_ENTIRE);
 	}
 	else {
@@ -1151,6 +1156,7 @@ ActionResult AutomationView::buttonAction(hid::Button b, bool on, bool inCardRou
 	}
 
 	OutputType outputType = clip->output->type;
+	bool isKit = clip->isKitClip();
 
 	// Scale mode button
 	if (b == SCALE_MODE) {
@@ -1451,6 +1457,7 @@ bool AutomationView::handleHorizontalEncoderButtonAction(bool on, bool isAudioCl
 		if (inAutomationEditor()) {
 			Clip* clip = getCurrentClip();
 			OutputType outputType = clip->output->type;
+			bool isKit = clip->isKitClip();
 
 			char modelStackMemory[MODEL_STACK_MAX_SIZE];
 			ModelStackWithTimelineCounter* modelStackWithTimelineCounter = nullptr;
@@ -1680,6 +1687,7 @@ ActionResult AutomationView::padAction(int32_t x, int32_t y, int32_t velocity) {
 
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	// if we're in a midi clip, with a midi cc selected and we press the name shortcut
 	// while holding shift, then enter the rename midi cc UI
@@ -1717,7 +1725,7 @@ ActionResult AutomationView::padAction(int32_t x, int32_t y, int32_t velocity) {
 			if (!modelStackWithNoteRow->getNoteRowAllowNull()) {
 				// if you're in note editor and note row doesn't exist, create it
 				// don't create note rows that don't exist in kits because those are empty kit rows
-				if (outputType != OutputType::KIT) {
+				if (!isKit) {
 					modelStackWithNoteRow = instrumentClipView.createNoteRowForYDisplay(
 					    modelStackWithTimelineCounter, instrumentClipView.lastAuditionedYDisplay);
 				}
@@ -1802,6 +1810,7 @@ ActionResult AutomationView::handleEditPadAction(ModelStackWithAutoParam* modelS
 bool AutomationView::shortcutPadAction(ModelStackWithAutoParam* modelStackWithParam, Clip* clip, Output* output,
                                        OutputType outputType, int32_t effectiveLength, int32_t x, int32_t y,
                                        int32_t velocity, int32_t xScroll, int32_t xZoom, SquareInfo& squareInfo) {
+	bool isKit = clip->isKitClip();
 	if (velocity) {
 		bool shortcutPress = false;
 		if (Buttons::isShiftButtonPressed()
@@ -1829,9 +1838,8 @@ bool AutomationView::shortcutPadAction(ModelStackWithAutoParam* modelStackWithPa
 			if (getCurrentUI() == &automationView) {
 				// make sure the context is valid for selecting a parameter
 				// can't select a parameter in a kit if you haven't selected a drum
-				if (onArrangerView
-				    || !(outputType == OutputType::KIT && !getAffectEntire() && !((Kit*)output)->selectedDrum)
-				    || (outputType == OutputType::KIT && getAffectEntire())) {
+				if (onArrangerView || !(isKit && !getAffectEntire() && !((Kit*)output)->selectedDrum)
+				    || (isKit && getAffectEntire())) {
 
 					handleParameterSelection(clip, output, outputType, x, y);
 
@@ -1852,13 +1860,14 @@ bool AutomationView::shortcutPadAction(ModelStackWithAutoParam* modelStackWithPa
 // overview or by using a grid shortcut combo
 void AutomationView::handleParameterSelection(Clip* clip, Output* output, OutputType outputType, int32_t xDisplay,
                                               int32_t yDisplay) {
+	bool isKit = clip->isKitClip();
 	// PatchSource::Velocity shortcut
 	// Enter Velocity Note Editor
 	if (xDisplay == kVelocityShortcutX && yDisplay == kVelocityShortcutY) {
 		if (clip->type == ClipType::INSTRUMENT) {
 			// don't enter if we're in a kit with affect entire enabled
-			if (!(outputType == OutputType::KIT && getAffectEntire())) {
-				if (outputType == OutputType::KIT) {
+			if (!(isKit && getAffectEntire())) {
+				if (isKit) {
 					potentiallyVerticalScrollToSelectedDrum((InstrumentClip*)clip, output);
 				}
 				initParameterSelection(false);
@@ -1879,14 +1888,13 @@ void AutomationView::handleParameterSelection(Clip* clip, Output* output, Output
 	// potentially select a regular automatable parameter
 	else if (!onArrangerView
 	         && (outputType == OutputType::SYNTH
-	             || (outputType == OutputType::KIT && !getAffectEntire() && ((Kit*)output)->selectedDrum
+	             || (isKit && !getAffectEntire() && ((Kit*)output)->selectedDrum
 	                 && ((Kit*)output)->selectedDrum->type == DrumType::SOUND))
 	         && ((patchedParamShortcuts[xDisplay][yDisplay] != kNoParamID)
 	             || (unpatchedNonGlobalParamShortcuts[xDisplay][yDisplay] != kNoParamID)
 	             || params::isPatchCableShortcut(xDisplay, yDisplay))) {
 		// don't allow automation of portamento in kit's
-		if ((outputType == OutputType::KIT)
-		    && (unpatchedNonGlobalParamShortcuts[xDisplay][yDisplay] == params::UNPATCHED_PORTAMENTO)) {
+		if ((isKit) && (unpatchedNonGlobalParamShortcuts[xDisplay][yDisplay] == params::UNPATCHED_PORTAMENTO)) {
 			return; // no parameter selected, don't re-render grid;
 		}
 
@@ -1914,8 +1922,7 @@ void AutomationView::handleParameterSelection(Clip* clip, Output* output, Output
 	}
 
 	// if you are in arranger, an audio clip, or a kit clip with affect entire enabled
-	else if ((onArrangerView || (outputType == OutputType::AUDIO)
-	          || (outputType == OutputType::KIT && getAffectEntire()))
+	else if ((onArrangerView || (outputType == OutputType::AUDIO) || (isKit && getAffectEntire()))
 	         && (unpatchedGlobalParamShortcuts[xDisplay][yDisplay] != kNoParamID)) {
 
 		params::Kind paramKind = params::Kind::UNPATCHED_GLOBAL;
@@ -1955,7 +1962,7 @@ void AutomationView::handleParameterSelection(Clip* clip, Output* output, Output
 	// expression params, so sounds or midi/cv, or a single drum
 	else if ((util::one_of(outputType, {OutputType::MIDI_OUT, OutputType::CV, OutputType::SYNTH})
 	          // selected a single sound drum
-	          || ((outputType == OutputType::KIT && !getAffectEntire() && ((Kit*)output)->selectedDrum
+	          || ((isKit && !getAffectEntire() && ((Kit*)output)->selectedDrum
 	               && ((Kit*)output)->selectedDrum->type == DrumType::SOUND)))
 	         && params::expressionParamFromShortcut(xDisplay, yDisplay) != kNoParamID) {
 		clip->lastSelectedParamID = params::expressionParamFromShortcut(xDisplay, yDisplay);
@@ -1998,6 +2005,7 @@ void AutomationView::handleParameterSelection(Clip* clip, Output* output, Output
 ActionResult AutomationView::handleMutePadAction(ModelStackWithTimelineCounter* modelStackWithTimelineCounter,
                                                  InstrumentClip* instrumentClip, Output* output, OutputType outputType,
                                                  int32_t y, int32_t velocity) {
+	bool isKit = instrumentClip->isKitClip();
 	if (onArrangerView) {
 		return arrangerView.handleStatusPadAction(y, velocity, &automationView);
 	}
@@ -2013,7 +2021,7 @@ ActionResult AutomationView::handleMutePadAction(ModelStackWithTimelineCounter* 
 				// if we're in a kit, and you press a mute pad
 				// check if it's a mute pad corresponding to the current selected drum
 				// if not, change the drum selection, refresh parameter selection and go back to automation overview
-				if (outputType == OutputType::KIT) {
+				if (isKit) {
 					if (modelStackWithNoteRow->getNoteRowAllowNull()) {
 						Drum* drum = modelStackWithNoteRow->getNoteRow()->drum;
 						if (((Kit*)output)->selectedDrum != drum) {
@@ -2084,7 +2092,7 @@ ActionResult AutomationView::auditionPadAction(InstrumentClip* clip, Output* out
 
 	bool clipIsActiveOnInstrument = InstrumentClipMinder::makeCurrentClipActiveOnInstrumentIfPossible(modelStack);
 
-	bool isKit = (outputType == OutputType::KIT);
+	bool isKit = clip->isKitClip();
 
 	ModelStackWithTimelineCounter* modelStackWithTimelineCounter = modelStack->addTimelineCounter(clip);
 
@@ -2326,6 +2334,7 @@ ActionResult AutomationView::verticalEncoderAction(int32_t offset, bool inCardRo
 
 	InstrumentClip* clip = getCurrentInstrumentClip();
 	OutputType outputType = clip->output->type;
+	bool isKit = clip->isKitClip();
 
 	char modelStackMemory[MODEL_STACK_MAX_SIZE];
 	ModelStackWithTimelineCounter* modelStack = currentSong->setupModelStackWithCurrentClip(modelStackMemory);
@@ -2343,7 +2352,7 @@ ActionResult AutomationView::verticalEncoderAction(int32_t offset, bool inCardRo
 			}
 		}
 		// If user not wanting to move a noteCode, they want to transpose the key
-		else if (!currentUIMode && outputType != OutputType::KIT) {
+		else if (!currentUIMode && !isKit) {
 			ActionResult result = instrumentClipView.commandTransposeKey(offset, inCardRoutine);
 			// if we're in note editor transposing will the change note selected
 			// so we want to re-render the display to show the updated note
@@ -2465,6 +2474,7 @@ void AutomationView::modEncoderButtonAction(uint8_t whichModEncoder, bool on) {
 
 	Clip* clip = getCurrentClip();
 	OutputType outputType = clip->output->type;
+	bool isKit = clip->isKitClip();
 
 	char modelStackMemory[MODEL_STACK_MAX_SIZE];
 	ModelStackWithTimelineCounter* modelStackWithTimelineCounter = nullptr;
@@ -2555,6 +2565,7 @@ void AutomationView::selectEncoderAction(int8_t offset) {
 	Clip* clip = getCurrentClip();
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	// if you've selected a mod encoder (e.g. by pressing modEncoderButton) and you're in Automation
 	// Overview the currentUIMode will change to Selecting Midi CC. In this case, turning select encoder
@@ -2592,14 +2603,12 @@ void AutomationView::selectEncoderAction(int8_t offset) {
 	// if you're in arranger view or in a non-midi, non-cv clip (e.g. audio, synth, kit)
 	else if (onArrangerView || outputType != OutputType::CV) {
 		// if you're in a audio clip, a kit with affect entire enabled, or in arranger view
-		if (onArrangerView || (outputType == OutputType::AUDIO)
-		    || (outputType == OutputType::KIT && getAffectEntire())) {
+		if (onArrangerView || (outputType == OutputType::AUDIO) || (isKit && getAffectEntire())) {
 			selectGlobalParam(offset, clip);
 		}
 		// if you're a synth or a kit (with affect entire off and a sound drum selected)
 		else if (outputType == OutputType::SYNTH
-		         || (outputType == OutputType::KIT && ((Kit*)output)->selectedDrum
-		             && ((Kit*)output)->selectedDrum->type == DrumType::SOUND)) {
+		         || (isKit && ((Kit*)output)->selectedDrum && ((Kit*)output)->selectedDrum->type == DrumType::SOUND)) {
 			selectNonGlobalParam(offset, clip);
 		}
 		// don't have patch cable blinking logic figured out yet
@@ -2944,18 +2953,17 @@ void AutomationView::getLastSelectedParamShortcut(Clip* clip) {
 void AutomationView::getLastSelectedParamArrayPosition(Clip* clip) {
 	Output* output = clip->output;
 	OutputType outputType = output->type;
+	bool isKit = clip->isKitClip();
 
 	// if you're in arranger view or in a non-midi, non-cv clip (e.g. audio, synth, kit)
 	if (onArrangerView || outputType != OutputType::CV) {
 		// if you're in a audio clip, a kit with affect entire enabled, or in arranger view
-		if (onArrangerView || (outputType == OutputType::AUDIO)
-		    || (outputType == OutputType::KIT && getAffectEntire())) {
+		if (onArrangerView || (outputType == OutputType::AUDIO) || (isKit && getAffectEntire())) {
 			getLastSelectedGlobalParamArrayPosition(clip);
 		}
 		// if you're a synth or a kit (with affect entire off and a drum selected)
 		else if (outputType == OutputType::SYNTH
-		         || (outputType == OutputType::KIT && ((Kit*)output)->selectedDrum
-		             && ((Kit*)output)->selectedDrum->type == DrumType::SOUND)) {
+		         || (isKit && ((Kit*)output)->selectedDrum && ((Kit*)output)->selectedDrum->type == DrumType::SOUND)) {
 			getLastSelectedNonGlobalParamArrayPosition(clip);
 		}
 	}
@@ -3107,13 +3115,14 @@ void AutomationView::setAutomationKnobIndicatorLevels(ModelStackWithAutoParam* m
 int32_t AutomationView::getEffectiveLength(ModelStackWithTimelineCounter* modelStack) {
 	Clip* clip = getCurrentClip();
 	OutputType outputType = clip->output->type;
+	bool isKit = clip->isKitClip();
 
 	int32_t effectiveLength = 0;
 
 	if (onArrangerView) {
 		effectiveLength = arrangerView.getMaxLength();
 	}
-	else if (outputType == OutputType::KIT && !getAffectEntire()) {
+	else if (isKit && !getAffectEntire()) {
 		ModelStackWithNoteRow* modelStackWithNoteRow = ((InstrumentClip*)clip)->getNoteRowForSelectedDrum(modelStack);
 
 		effectiveLength = modelStackWithNoteRow->getLoopLength();

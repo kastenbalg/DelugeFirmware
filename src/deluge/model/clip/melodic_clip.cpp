@@ -73,6 +73,18 @@ bool MelodicClip::allowNoteTails(ModelStackWithNoteRow* modelStack) {
 }
 
 // -----------------------------------------------------------------------
+// ModControllable/ParamManager derivation
+// -----------------------------------------------------------------------
+
+ModControllable* MelodicClip::getModControllableForNoteRow(NoteRow* /*noteRow*/) {
+	return output ? output->toModControllable() : nullptr;
+}
+
+ParamManager* MelodicClip::getParamManagerForNoteRow(NoteRow* /*noteRow*/) {
+	return &paramManager;
+}
+
+// -----------------------------------------------------------------------
 // Melodic-specific methods (moved from InstrumentClip in Phase 1.3)
 // -----------------------------------------------------------------------
 

@@ -48,6 +48,11 @@ public:
 	// --- Note tail dispatch (per-drum check) ---
 	bool allowNoteTails(ModelStackWithNoteRow* modelStack) override;
 
+	// --- ModControllable/ParamManager derivation ---
+	void getActiveModControllable(ModelStackWithTimelineCounter* modelStack) override;
+	ModControllable* getModControllableForNoteRow(NoteRow* noteRow) override;
+	ParamManager* getParamManagerForNoteRow(NoteRow* noteRow) override;
+
 	// --- Kit-specific methods (moved from InstrumentClip in Phase 1.3) ---
 	NoteRow* createNewNoteRowForKit(ModelStackWithTimelineCounter* modelStack, bool atStart,
 	                                int32_t* getIndex = nullptr);

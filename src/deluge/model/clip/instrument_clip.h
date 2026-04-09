@@ -174,6 +174,16 @@ public:
 	bool hasSameInstrument(InstrumentClip* otherClip);
 	virtual bool isScaleModeClip() { return false; }
 	virtual bool allowNoteTails(ModelStackWithNoteRow* modelStack);
+
+	/// Derive the ModControllable for a given NoteRow context.
+	/// KitClip: returns drum->toModControllable() if drum exists, else output->toModControllable()
+	/// MelodicClip: always returns output->toModControllable()
+	virtual ModControllable* getModControllableForNoteRow(NoteRow* noteRow);
+
+	/// Derive the ParamManager for a given NoteRow context.
+	/// KitClip: returns &noteRow->paramManager if drum exists, else &this->paramManager
+	/// MelodicClip: always returns &this->paramManager
+	virtual ParamManager* getParamManagerForNoteRow(NoteRow* noteRow);
 	Error setAudioInstrument(Instrument* newInstrument, Song* song, bool shouldNotifyInstrument,
 	                         ParamManager* newParamManager, InstrumentClip* favourClipForCloningParamManager = nullptr);
 

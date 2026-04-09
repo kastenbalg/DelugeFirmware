@@ -52,6 +52,10 @@ public:
 	// --- Note tail dispatch (instrument-wide: MIDI/CV always true, SYNTH via instrument) ---
 	bool allowNoteTails(ModelStackWithNoteRow* modelStack) override;
 
+	// --- ModControllable/ParamManager derivation ---
+	ModControllable* getModControllableForNoteRow(NoteRow* noteRow) override;
+	ParamManager* getParamManagerForNoteRow(NoteRow* noteRow) override;
+
 	// --- Melodic-specific methods (moved from InstrumentClip in Phase 1.3) ---
 	void transpose(int32_t semitones, ModelStackWithTimelineCounter* modelStack);
 	void nudgeNotesVertically(int32_t direction, VerticalNudgeType type, ModelStackWithTimelineCounter* modelStack);
